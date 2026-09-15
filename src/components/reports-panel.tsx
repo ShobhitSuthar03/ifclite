@@ -1,0 +1,193 @@
+import { BarChart3 } from 'lucide-react'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { cn } from '@/lib/utils'
+import {
+  GROUP_BY_OPTIONS,
+  METRIC_OPTIONS,
+  REPORT_TEMPLATES,
+  type FilterOptions,
+  type GroupByField,
+  type MetricField,
+  type ReportFilter,
+  type ReportTemplate,
+} from '@/lib/bim-sql'
+
+type ReportsPanelProps = {
+  ready: boolean
+  busy: boolean
+  template: ReportTemplate
+  groupBy: GroupByField
+  metrics: MetricField[]
+  filter: ReportFilter
+  options: FilterOptions | null
+  followViewer: boolean
+  onTemplate: (template: ReportTemplate) => void
+  onGroupBy: (groupBy: GroupByField) => void
+  onMetrics: (metrics: MetricField[]) => void
+  onFilter: (filter: ReportFilter) => void
+  onFollowViewer: (follow: boolean) => void
+}
+
+const fieldClass =
+  'h-8 w-full rounded border border-border bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring'
+
+export function ReportsPanel({
+  ready,
+  busy,
+  template,
+  groupBy,
+  metrics,
+  filter,
+  options,
+  followViewer,
+  onTemplate,
+  onGroupBy,
+  onMetrics,
+  onFilter,
+  onFollowViewer,
+}: ReportsPanelProps) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-start gap-2 border-b border-border p-3">
+        <BarChart3 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+        <div className="min-w-0">
+          <p className="text-[13px] font-semibold">Reports</p>
+          <p className="text-[11px] text-muted-foreground">
+            SQL aggregations over elements, quantities, cost codes, and 4D status. Click a chart or table row to isolate
+            those GUIDs in 3D.
+          </p>
+        </div>
+      </div>
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="space-y-3 p-3">
+          {!ready ? (
+            <p className="text-xs text-muted-foreground italic">
+              {busy ? 'Building the reporting warehouse…' : 'Load an IFC model to query the BIM tables.'}
+            </p>
+          ) : null}
+          <section>
+            <p className="mb-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">Templates</p>
+            <div className="space-y-1">
+              {REPORT_TEMPLATES.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  disabled={!ready}
+                  className={cn(
+                    'w-full rounded px-2 py-1.5 text-left hover:bg-accent disabled:opacity-40',
+                    template === item.id && 'bg-primary/15',
+                  )}
+                  onClick={() => onTemplate(item.id)}
+                >
+                  <span className="block text-[13px]">{item.label}</span>
+                  <span className="block text-[10px] text-muted-foreground">{item.hint}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+          <label className="flex items-center gap-2 text-[12px]">
+            <input
+              type="checkbox"
+              checked={followViewer}
+              onChange={(event) => onFollowViewer(event.target.checked)}
+            />
+            Filter report to 3D selection
+          </label>
+          <FilterSelect
+            label="Level / storey"
+            value={filter.storey}
+            options={options?.storeys ?? []}
+            onChange={(storey) => onFilter({ ...filter, storey })}
+          />
+          <FilterSelect
+            label="Category"
+            value={filter.category}
+            options={options?.categories ?? []}
+            onChange={(category) => onFilter({ ...filter, category })}
+          />
+          <FilterSelect
+            label="Cost code"
+            value={filter.costCode}
+            options={options?.costCodes ?? []}
+            onChange={(costCode) => onFilter({ ...filter, costCode })}
+          />
+          <FilterSelect
+            label="Phase"
+            value={filter.phase}
+            options={options?.phases ?? []}
+            onChange={(phase) => onFilter({ ...filter, phase })}
+          />
+          <FilterSelect
+            label="4D status"
+            value={filter.status}
+            options={options?.statuses ?? []}
+            onChange={(status) => onFilter({ ...filter, status })}
+          />
+          {(template === 'qto' || template === 'cost' || template === 'custom') && (
+            <label className="block text-[12px]">
+              <span className="mb-1 block text-muted-foreground">Group by</span>
+              <select className={fieldClass} value={groupBy} onChange={(event) => onGroupBy(event.target.value as GroupByField)}>
+                {GROUP_BY_OPTIONS.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {template === 'custom' ? (
+            <fieldset className="space-y-1">
+              <legend className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">Metrics</legend>
+              {METRIC_OPTIONS.map((item) => {
+                const checked = metrics.includes(item.value)
+                return (
+                  <label key={item.value} className="flex items-center gap-2 text-[12px]">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        const next = checked ? metrics.filter((metric) => metric !== item.value) : [...metrics, item.value]
+                        onMetrics(next.length > 0 ? next : ['count'])
+                      }}
+                    />
+                    {item.label}
+                  </label>
+                )
+              })}
+            </fieldset>
+          ) : null}
+        </div>
+      </ScrollArea>
+    </div>
+  )
+}
+
+function FilterSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: string | null
+  options: string[]
+  onChange: (value: string | null) => void
+}) {
+  return (
+    <label className="block text-[12px]">
+      <span className="mb-1 block text-muted-foreground">{label}</span>
+      <select
+        className={fieldClass}
+        value={value ?? ''}
+        onChange={(event) => onChange(event.target.value || null)}
+      >
+        <option value="">All</option>
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}

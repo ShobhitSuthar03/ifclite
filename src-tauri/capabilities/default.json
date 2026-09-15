@@ -1,0 +1,10 @@
+{
+  "identifier": "default",
+  "description": "Main window can call NativeBridge host commands and the file dialog.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "dialog:default"
+  ]
+}

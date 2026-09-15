@@ -1,0 +1,99 @@
+import { Eye, EyeOff, Focus, Ghost, Home } from 'lucide-react'
+import type { DisplayMode } from '@/lib/view-visibility'
+import { cn, formatCount } from '@/lib/utils'
+
+type ToolStripProps = {
+  canFit: boolean
+  matchCount: number | null
+  hasSelection: boolean
+  displayMode: DisplayMode
+  hiddenCount: number
+  canShowAll: boolean
+  onFit: () => void
+  onHide: () => void
+  onGhost: () => void
+  onIsolate: () => void
+  onShowAll: () => void
+}
+
+const btn =
+  'flex h-8 items-center gap-1 rounded px-2 text-[11px] text-foreground hover:bg-accent disabled:opacity-40'
+
+export function ToolStrip({
+  canFit,
+  matchCount,
+  hasSelection,
+  displayMode,
+  hiddenCount,
+  canShowAll,
+  onFit,
+  onHide,
+  onGhost,
+  onIsolate,
+  onShowAll,
+}: ToolStripProps) {
+  return (
+    <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border bg-card px-3">
+      <button type="button" title="Fit model in view" disabled={!canFit} className={cn(btn, 'w-8 px-0')} onClick={onFit}>
+        <Home className="h-4 w-4" />
+      </button>
+      <span className="mx-1 h-5 w-px bg-border" />
+      <button
+        type="button"
+        title="Hide selected"
+        disabled={!hasSelection}
+        className={btn}
+        onClick={onHide}
+      >
+        <EyeOff className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">Hide</span>
+      </button>
+      <button
+        type="button"
+        title="Ghost the rest of the model (selected stays solid)"
+        disabled={!hasSelection}
+        className={cn(btn, displayMode === 'ghost' && 'bg-primary/20 text-primary')}
+        onClick={onGhost}
+      >
+        <Ghost className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">Ghost</span>
+      </button>
+      <button
+        type="button"
+        title="Isolate selected (hide everything else)"
+        disabled={!hasSelection}
+        className={cn(btn, displayMode === 'isolate' && 'bg-primary/20 text-primary')}
+        onClick={onIsolate}
+      >
+        <Focus className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">Isolate</span>
+      </button>
+      <button type="button" title="Show all elements" disabled={!canShowAll} className={btn} onClick={onShowAll}>
+        <Eye className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">Show all</span>
+      </button>
+      <span className="mx-2 hidden h-5 w-px bg-border sm:block" />
+      <p className="hidden text-[11px] text-muted-foreground lg:block">
+        Left-drag orbit · Right-drag pan · Scroll zoom · Click select · Ctrl+click add
+      </p>
+      <div className="ml-auto flex items-center gap-1">
+        {hiddenCount > 0 && (
+          <span className="rounded-[3px] bg-secondary px-1.5 py-px text-[10px] font-semibold">
+            {formatCount(hiddenCount)} hidden
+          </span>
+        )}
+        {displayMode === 'ghost' && (
+          <span className="rounded-[3px] bg-primary px-1.5 py-px text-[10px] font-semibold text-white">Ghost</span>
+        )}
+        {displayMode === 'isolate' && (
+          <span className="rounded-[3px] bg-primary px-1.5 py-px text-[10px] font-semibold text-white">Isolated</span>
+        )}
+        {matchCount != null && (
+          <span className="rounded-[3px] bg-primary px-1.5 py-px text-[10px] font-semibold text-white">
+            {formatCount(matchCount)} filtered
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
