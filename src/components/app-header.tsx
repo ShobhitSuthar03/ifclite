@@ -1,4 +1,4 @@
-import { FolderOpen, Loader2, Box } from 'lucide-react'
+import { FolderOpen, Loader2, Box, Download } from 'lucide-react'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -14,6 +14,8 @@ type AppHeaderProps = {
   onBackToViewer?: () => void
   canLoad?: boolean
   homeOpen?: boolean
+  onExportIfc?: () => void
+  exportBusy?: boolean
 }
 
 export function AppHeader({
@@ -26,6 +28,8 @@ export function AppHeader({
   onBackToViewer,
   canLoad = true,
   homeOpen = false,
+  onExportIfc,
+  exportBusy = false,
 }: AppHeaderProps) {
   const kind = hostKind()
 
@@ -59,6 +63,18 @@ export function AppHeader({
         {onCloseProject ? (
           <Button variant="outline" size="sm" onClick={onCloseProject} disabled={busy}>
             Close project
+          </Button>
+        ) : null}
+        {!homeOpen && onExportIfc ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onExportIfc}
+            disabled={busy || exportBusy}
+            title="Bake registered properties and property edits into an exported .ifc file"
+          >
+            {exportBusy ? <Loader2 className="animate-spin" /> : <Download />}
+            {exportBusy ? 'Exporting…' : 'Export IFC'}
           </Button>
         ) : null}
         {!homeOpen ? (

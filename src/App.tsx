@@ -102,9 +102,12 @@ import {
   saveProjectQuantities,
   saveProjectWarehouse,
   sessionFromSnapshot,
+  writeIfcFile,
   type ProjectRecord,
   type ProjectSnapshot,
 } from '@/lib/projects'
+import { exportIfcWithMutations } from '@/lib/ifc-export'
+import { save as saveFileDialog } from '@tauri-apps/plugin-dialog'
 import {
   persistableQuantities,
   type MutationPatch,
@@ -203,6 +206,7 @@ export default function App() {
   const [rightTab, setRightTab] = useState<RightTab>('properties')
   const [sourceBytes, setSourceBytes] = useState<Uint8Array | null>(null)
   const [exportMessage, setExportMessage] = useState<string | null>(null)
+  const [ifcExportBusy, setIfcExportBusy] = useState(false)
   const [engineStatus, setEngineStatus] = useState<GeometryEngineStatus>(getGeometryEngineStatus)
   const [quantities, setQuantities] = useState<QuantityResult | null>(null)
   const [quantityBusy, setQuantityBusy] = useState(false)
@@ -237,6 +241,7 @@ export default function App() {
   const pendingQuantityIds = useRef<Set<number> | null>(null)
   const pendingFullQuantities = useRef<QuantityResult | null>(null)
   const elementFaceCache = useRef<Map<number, ElementQuantity>>(new Map())
+  const lastLoadSource = useRef<LoadSource | null>(null)
   const warehouseRestored = useRef(false)
   const pendingMeshes = useRef<MeshData[]>([])
   const meshRaf = useRef(0)
@@ -372,6 +377,7 @@ export default function App() {
   const load = useCallback(async (source: LoadSource) => {
     const gen = loadGen.current + 1
     loadGen.current = gen
+    lastLoadSource.current = source
     setHomeOpen(false)
     setBusy(true)
     setLoadingName(source.name)
@@ -896,6 +902,56 @@ export default function App() {
     }
     setMutationTick((tick) => tick + 1)
   }, [mutationView, mutationPatches])
+
+  // Exporting needs a live IfcDataStore (StepExporter's requirement) - a desktop
+  // reopen skips that parse for speed, so hydrate it on demand here rather than
+  // require it up front. Builds its own throwaway MutablePropertyView instead of
+  // waiting on the reactive `mutationView` to catch up, so a freshly-hydrated
+  // store's edits are guaranteed applied within this same call.
+  const onExportIfc = useCallback(async () => {
+    if (!result) {
+      setError('No model loaded to export.')
+      return
+    }
+    setIfcExportBusy(true)
+    setError(null)
+    try {
+      let exportStore = store
+      if (!exportStore) {
+        if (!lastLoadSource.current) throw new Error('No model source available to export.')
+        const buffer = await resolveSourceBytes(lastLoadSource.current)
+        exportStore = await buildDataStore(buffer)
+        setStore(exportStore)
+        setSpatialRoot(buildSpatialTreeFromStore(exportStore))
+      }
+      const exportView = createMutationView(exportStore)
+      for (const patch of mutationPatches) {
+        if (patch.kind === 'attribute') exportView.setAttribute(patch.expressId, patch.name, patch.value)
+        else if (patch.pset) exportView.setProperty(patch.expressId, patch.pset, patch.name, patch.value)
+      }
+      const exported = exportIfcWithMutations(exportStore, exportView)
+      const baseName = (result.fileName || 'model.ifc').replace(/\.ifc$/i, '')
+      const path = await saveFileDialog({
+        title: 'Export IFC',
+        defaultPath: `${baseName}-edited.ifc`,
+        filters: [{ name: 'IFC', extensions: ['ifc'] }],
+      })
+      if (!path) return
+      await writeIfcFile(path, exported.content)
+      const warningNote =
+        exported.warnings.length > 0
+          ? ` (${exported.warnings.length} warning${exported.warnings.length === 1 ? '' : 's'})`
+          : ''
+      setExportMessage(
+        `Exported ${exported.modifiedEntityCount} modified of ${exported.entityCount} entities to ${path}${warningNote}`,
+      )
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught))
+    } finally {
+      setIfcExportBusy(false)
+    }
+  }, [result, store, mutationPatches])
+
   const entity: EntityData | null = useMemo(() => {
     if (selectedId == null) return null
     const type =
@@ -1496,6 +1552,8 @@ export default function App() {
         onCloseProject={desktopHost && project ? () => void onCloseProject() : undefined}
         onBackToViewer={desktopHost && homeOpen && !empty ? () => setHomeOpen(false) : undefined}
         canLoad={!desktopHost || Boolean(project)}
+        onExportIfc={desktopHost && result ? () => void onExportIfc() : undefined}
+        exportBusy={ifcExportBusy}
       />
       {desktopHost && homeOpen ? (
         <div

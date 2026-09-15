@@ -121,3 +121,10 @@ export async function getProjectQuantities(): Promise<string | null> {
 export function sessionFromSnapshot(snapshot: ProjectSnapshot): ProjectSession | null {
   return parseSessionJson(snapshot.sessionJson)
 }
+
+/** Writes exported IFC bytes to an arbitrary path (e.g. chosen via a save dialog). */
+export async function writeIfcFile(path: string, bytes: Uint8Array): Promise<void> {
+  await invoke('write_ifc_file', bytes, {
+    headers: { 'x-output-path': encodeURIComponent(path) },
+  })
+}

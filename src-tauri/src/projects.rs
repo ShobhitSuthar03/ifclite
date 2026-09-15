@@ -483,88 +483,21 @@ pub fn get_project_quantities(book: State<'_, ProjectBook>) -> Result<Response, 
     Ok(Response::new(bytes))
 }
 
-/// One entry from the app's `MutationPatch[]` (property/attribute edit overlay) -
-/// same shape, so the frontend can pass its mutation list straight through.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MutationPatchDto {
-    pub express_id: i64,
-    pub kind: String,
-    pub name: String,
-    pub value: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pset: Option<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ExportRequest {
-    source_path: String,
-    output_path: String,
-    mutations: Vec<MutationPatchDto>,
-}
-
-/// Bakes the mutation overlay (property/attribute edits, including anything
-/// registered from the manual takeoff basket) into a real IFC file via a bundled
-/// Python + ifcopenshell script - `@ifc-lite/*` doesn't ship a STEP writer yet, and
-/// ifcopenshell is the standard tool for this rather than hand-rolling one.
+/// Writes STEP bytes produced by `@ifc-lite/export`'s `StepExporter` (JS side) to
+/// an arbitrary path the user chose via a native Save dialog. The exporter itself
+/// runs in-process in JS; this command only exists because a webview can't write
+/// arbitrary filesystem paths directly. `path` travels as a header (percent-encoded,
+/// see `import_ifc_bytes`) since a raw-bytes body leaves no room for a second arg.
 #[tauri::command]
-pub fn export_ifc(
-    app: AppHandle,
-    book: State<'_, ProjectBook>,
-    mutations: Vec<MutationPatchDto>,
-    output_path: String,
-) -> Result<String, String> {
-    let project = require_current(&book)?;
-    let model_file = project
-        .model_file
-        .clone()
-        .ok_or_else(|| "project has no model file to export".to_string())?;
-    let source_path = PathBuf::from(&project.folder_path).join(model_file);
-
-    let script_path = app
-        .path()
-        .resolve("scripts/export_ifc.py", tauri::path::BaseDirectory::Resource)
-        .map_err(|err| format!("failed to locate export_ifc.py: {err}"))?;
-
-    let request = ExportRequest {
-        source_path: source_path.to_string_lossy().to_string(),
-        output_path: output_path.clone(),
-        mutations,
-    };
-    let request_json = serde_json::to_string(&request).map_err(|err| err.to_string())?;
-    let request_path = std::env::temp_dir().join(format!("ifclite-export-{}.json", now_ms()));
-    fs::write(&request_path, request_json).map_err(|err| err.to_string())?;
-
-    let run = std::process::Command::new("python")
-        .arg(&script_path)
-        .arg(&request_path)
-        .output();
-    let _ = fs::remove_file(&request_path);
-    let output = run.map_err(|err| format!("failed to run export_ifc.py (is Python installed?): {err}"))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let last_line = stdout.lines().last().unwrap_or("");
-    let parsed: serde_json::Value = serde_json::from_str(last_line).map_err(|_| {
-        format!(
-            "export_ifc.py produced no usable output: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-    })?;
-
-    if parsed.get("ok").and_then(|v| v.as_bool()) == Some(true) {
-        Ok(parsed
-            .get("outputPath")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&output_path)
-            .to_string())
-    } else {
-        Err(parsed
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("export failed")
-            .to_string())
-    }
+pub fn write_ifc_file(request: Request<'_>) -> Result<(), String> {
+    let path = request
+        .headers()
+        .get("x-output-path")
+        .and_then(|value| value.to_str().ok())
+        .map(percent_decode)
+        .ok_or_else(|| "missing x-output-path header".to_string())?;
+    let bytes = raw_body(&request)?;
+    fs::write(&path, bytes).map_err(|err| format!("failed to write {path}: {err}"))
 }
 
 #[cfg(test)]
