@@ -1,29 +1,36 @@
 # IFClite Desktop
 
-A Tauri v2 desktop shell for [IFClite](https://ifclite.dev/docs/guide/desktop/). Hosted on Cursor Origin only (not GitHub): [shobhit-suthar/ifclite-tauri-desktop](https://cursor.com/codebase/shobhit-suthar/ifclite-tauri-desktop).
+A Tauri v2 desktop shell for [IFClite](https://ifclite.dev/docs/guide/desktop/).
+
+- **Windows (this PC):** clone [ShobhitSuthar03/ifclite](https://github.com/ShobhitSuthar03/ifclite) with Git. Then `git pull` whenever the app changes. Do **not** re-download a zip from Cursor Codebase.
+- **Cursor agents / Origin:** [shobhit-suthar/ifclite-tauri-desktop](https://cursor.com/codebase/shobhit-suthar/ifclite-tauri-desktop) (Origin CLI is WSL / macOS / Linux only).
 
 The same React viewer runs in the browser (WASM geometry) and as a native Tauri app (Rayon + packed-shard cache).
 
 ## Local setup (Windows)
 
-Origin CLI is **WSL / macOS / Linux only**, not PowerShell. Clone in WSL, then open that folder in Cursor Desktop.
+### 1. Clone once from GitHub (PowerShell)
 
-### 1. Clone from Origin (WSL)
+Install [Git for Windows](https://git-scm.com/download/win) if needed. Git Credential Manager may ask for a GitHub username (`ShobhitSuthar03`) and a **Personal Access Token** (not your GitHub website password), or a browser Sign in.
 
-```bash
-# Run in WSL (Ubuntu)
-curl -fsSL https://downloads.cursor.com/origin/install.sh | sh
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-
-origin auth login
-origin repo clone shobhit-suthar/ifclite-tauri-desktop
-cd ifclite-tauri-desktop
+```powershell
+cd C:\Projects
+git clone https://github.com/ShobhitSuthar03/ifclite.git
+cd ifclite
 ```
 
-In Cursor Desktop: **File → Open Folder** and pick the WSL path, for example:
+Keep this folder. Later updates:
 
-`\\wsl$\Ubuntu\home\<your-linux-user>\ifclite-tauri-desktop`
+```powershell
+cd C:\Projects\ifclite
+git checkout main
+git pull
+npm install
+```
+
+Or: `powershell -File scripts\update.ps1`
+
+A Codebase **Download** is a snapshot without Git history, so you cannot `git pull` it. Clone GitHub instead of downloading again.
 
 ### 2. First run — browser preview (no Rust)
 
@@ -51,9 +58,19 @@ npm install
 npm run dev:desktop
 ```
 
-The badge should say **Native Tauri**. First compile of `ifc-lite-processing` can take several minutes.
+The badge should say **Desktop**. First compile of `ifc-lite-processing` can take several minutes.
 
-On **WSL** instead of native Windows, install Linux WebKitGTK deps, then `npm run dev:desktop`:
+### Optional: Origin CLI (WSL / macOS / Linux only)
+
+PowerShell cannot run `origin repo clone`. If you use WSL:
+
+```bash
+curl -fsSL https://downloads.cursor.com/origin/install.sh | sh
+origin auth login
+origin repo clone shobhit-suthar/ifclite-tauri-desktop
+```
+
+On **WSL** instead of native Windows for Tauri, install Linux WebKitGTK deps, then `npm run dev:desktop`:
 
 ```bash
 sudo apt-get update

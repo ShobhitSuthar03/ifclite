@@ -89,7 +89,7 @@ export const ViewerCanvas = memo(function ViewerCanvas({
       powerPreference: softwareGpu ? 'low-power' : 'high-performance',
       logarithmicDepthBuffer: false,
     })
-    const pixelRatio = softwareGpu ? 1 : Math.min(window.devicePixelRatio || 1, 1.5)
+    const pixelRatio = softwareGpu ? 1 : Math.min(window.devicePixelRatio || 1, 1.25)
     renderer.setPixelRatio(pixelRatio)
     const colors = VIEWPORT_THEME[themeRef.current]
     renderer.setClearColor(colors.clear, 1)
@@ -181,6 +181,7 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     let pointerDownY = 0
     let didDrag = false
     let hoverRaf = 0
+    let lastHoverAt = 0
 
     const setEmissive = (id: number | null, hex: number, intensity: number) => {
       if (id == null) return
@@ -193,6 +194,7 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     }
 
     const raycaster = new THREE.Raycaster()
+    raycaster.layers.enableAll()
     const pointer = new THREE.Vector2()
     const pickAt = (clientX: number, clientY: number): number | null => {
       const rect = canvas.getBoundingClientRect()
@@ -201,26 +203,29 @@ export const ViewerCanvas = memo(function ViewerCanvas({
         -((clientY - rect.top) / rect.height) * 2 + 1,
       )
       raycaster.setFromCamera(pointer, camera)
-      const pickFrom =
+      const groups =
         overlayGroup.children.length > 0
-          ? overlayGroup.children.concat(modelGroup.children)
-          : modelGroup.children
-      const hits = raycaster.intersectObjects(pickFrom, false)
+          ? [overlayGroup.children, modelGroup.children]
+          : [modelGroup.children]
       const isolated = isolatedRef.current
       const hidden = hiddenRef.current
       const ghost = ghostRef.current
       const viewIsolate = viewIsolateRef.current
-      const hit = hits.find((item) => {
-        const id = item.object.userData.expressId as number | undefined
-        if (id == null) return false
-        if (hidden.has(id) || ghost.has(id)) return false
-        if (viewIsolate && !viewIsolate.has(id)) return false
-        if (isolated && !isolated.has(id)) return false
-        return true
-      })
-      if (!hit) return null
-      const expressId = hit.object.userData.expressId as number | undefined
-      return expressId ?? null
+      for (const pickFrom of groups) {
+        const hits = raycaster.intersectObjects(pickFrom, false)
+        const hit = hits.find((item) => {
+          const id = item.object.userData.expressId as number | undefined
+          if (id == null) return false
+          if (hidden.has(id) || ghost.has(id)) return false
+          if (viewIsolate && !viewIsolate.has(id)) return false
+          if (isolated && !isolated.has(id)) return false
+          return true
+        })
+        if (!hit) continue
+        const expressId = hit.object.userData.expressId as number | undefined
+        return expressId ?? null
+      }
+      return null
     }
 
     const onPointerDown = (event: PointerEvent) => {
@@ -242,6 +247,9 @@ export const ViewerCanvas = memo(function ViewerCanvas({
         return
       }
       if (hoverRaf) return
+      const now = performance.now()
+      if (now - lastHoverAt < 80) return
+      lastHoverAt = now
       const cx = event.clientX
       const cy = event.clientY
       hoverRaf = requestAnimationFrame(() => {
@@ -386,6 +394,9 @@ export const ViewerCanvas = memo(function ViewerCanvas({
         const dim = !hidden && !ghost && isolatedIds != null && !isolatedIds.has(id)
         const fade = ghost || dim
         const override = colorOverrides?.get(id)
+        const visKey = `${hidden ? 1 : 0}${ghost ? 1 : 0}${dim ? 1 : 0}${override ? override.join() : ''}`
+        if (mesh.userData.visKey === visKey) continue
+        mesh.userData.visKey = visKey
         mesh.visible = !hidden
         if (override) material.color.setRGB(override[0], override[1], override[2])
         else if (mesh.userData.baseColor) material.color.copy(mesh.userData.baseColor)

@@ -1,5 +1,7 @@
 # Local setup for IFClite Desktop on Windows (PowerShell).
-# Run from the repo root after cloning in WSL, or after opening the folder in Cursor.
+# Clone from GitHub first (not Codebase Download):
+#   git clone https://github.com/ShobhitSuthar03/ifclite.git
+# Later updates: powershell -File scripts\update.ps1
 $ErrorActionPreference = "Stop"
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {

@@ -27,7 +27,7 @@ export function hostKind(): HostKind {
 }
 
 export function hostLabel(kind: HostKind = hostKind()): string {
-  return kind === 'tauri' ? 'Native Tauri' : 'Web WASM'
+  return kind === 'tauri' ? 'Desktop' : 'Browser'
 }
 
 export function hostDetail(kind: HostKind = hostKind()): string {

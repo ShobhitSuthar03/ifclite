@@ -80,7 +80,7 @@ export function StatusBar({
               </strong>
             </span>
             {isolatedCount != null && <span>{formatCount(isolatedCount)} isolated</span>}
-            {parsing ? <span>Indexing IFC…</span> : null}
+            {parsing ? <span>Still reading properties…</span> : null}
             {exportMessage && <span className="truncate">{exportMessage}</span>}
             {quantitySummary && !quantityBusy ? (
               <span className="truncate text-foreground">{quantitySummary}</span>
@@ -90,17 +90,19 @@ export function StatusBar({
         ) : progress ? (
           <span>
             {progress.phase === 'init'
-              ? 'Loading WASM geometry engine…'
+              ? 'Starting the 3D engine…'
               : progress.phase === 'cache-lookup'
-                ? 'Checking native geometry cache…'
-                : `Streaming ${formatCount(processed)}${total ? ` / ${formatCount(total)}` : ''} meshes`}
+                ? 'Looking for a saved 3D cache…'
+                : progress.cacheHit
+                  ? `Opening saved 3D · ${formatCount(processed)}${total ? ` / ${formatCount(total)}` : ''}`
+                  : `Building 3D · ${formatCount(processed)}${total ? ` / ${formatCount(total)}` : ''}`}
           </span>
         ) : engineStatus === 'loading' ? (
           <span>Loading geometry engine…</span>
         ) : engineStatus === 'error' ? (
           <span>Geometry engine failed to start — load an IFC to retry</span>
         ) : (
-          <span>Ready · drop an IFC file or use Load IFC</span>
+          <span>Ready — create a project, then open an IFC</span>
         )}
       </div>
       <div className="flex shrink-0 items-center gap-2">
@@ -123,14 +125,14 @@ export function StatusBar({
               type="button"
               className="h-7 rounded bg-primary px-2.5 text-[11px] font-medium text-primary-foreground disabled:opacity-40"
               disabled={!canCalculate || quantityBusy}
-              title={canCalculate ? 'Calculate geometry quantities for the selection' : 'Select an element first'}
+              title={canCalculate ? 'Measure the selected elements' : 'Click an element in 3D first'}
               onClick={onCalculateQuantities}
             >
-              {quantityBusy ? 'Calculating…' : 'Calculate quantities'}
+              {quantityBusy ? 'Calculating…' : 'Measure selection'}
             </button>
             <span>
-              {formatCount(result.totalMeshes)} meshes · {formatBytes(result.fileBytes)} · {result.elapsedMs} ms
-              {result.cacheHit ? ' · mesh cache' : ''}
+              {formatCount(result.totalMeshes)} parts · {formatBytes(result.fileBytes)}
+              {result.cacheHit ? ' · reused saved 3D' : ' · first 3D build'}
             </span>
           </>
         )}

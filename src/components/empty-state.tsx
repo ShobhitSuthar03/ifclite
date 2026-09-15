@@ -28,35 +28,47 @@ export function EmptyState({
   onDismiss,
 }: EmptyStateProps) {
   const needsProject = projectsEnabled && !currentProject
+  const folder = projectsRoot ?? 'Documents\\IFCLite'
 
   return (
     <div
       className={cn(
-        'flex h-full flex-col items-center justify-center gap-5 px-6 text-center',
+        'flex h-full flex-col items-center justify-center gap-6 px-6 text-center',
         dragActive
           ? 'bg-primary/20 ring-2 ring-primary/50 ring-inset'
           : 'bg-[radial-gradient(circle_at_center,var(--viewport-mid)_0%,var(--viewport)_100%)]',
       )}
     >
-      <div className="max-w-lg space-y-2">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
-          {projectsEnabled ? 'Documents / IFCLite' : 'IFClite'}
-        </p>
-        <h2 className="text-[22px] font-semibold">
-          {needsProject
-            ? 'Projects'
-            : currentProject
-              ? currentProject.name
-              : 'Drop an IFC onto the viewport'}
+      <div className="max-w-xl space-y-3">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">IFClite Desktop</p>
+        <h2 className="text-[24px] font-semibold tracking-tight">
+          {needsProject ? 'Start a project' : currentProject ? `Add a model to ${currentProject.name}` : 'Open an IFC model'}
         </h2>
-        <p className="text-[13px] text-muted-foreground">
+        <p className="text-[14px] leading-relaxed text-muted-foreground">
           {needsProject
-            ? `Create a project first. Files are stored in ${projectsRoot ?? 'Documents\\IFCLite'} so geometry and reports survive the next launch.`
+            ? `Give the job a name. Everything for it — the IFC copy, 3D cache, and reports — is saved in ${folder}. Next time, click the project in the list. You do not start from a blank viewer.`
             : currentProject
-              ? `This project folder is ready. Load an IFC (it is copied into the project). Next time, open the project from this screen.`
-              : 'Geometry streams into the scene while the parser builds the spatial tree and property sets. Project folders only appear in the Native Tauri window, not in a browser tab.'}
+              ? 'Step 2 of 2: open an IFC. The file is copied into this project. The first open builds 3D; later opens reuse that saved 3D.'
+              : 'Drop an IFC here or use Open IFC. Project folders (Documents\\IFCLite) only appear in the desktop app, not in a browser tab.'}
         </p>
       </div>
+
+      {needsProject ? (
+        <ol className="w-full max-w-xl space-y-2 text-left text-[13px] text-muted-foreground">
+          <li className="rounded-md border border-primary/40 bg-card px-3 py-2 text-foreground">
+            <span className="mr-2 font-semibold text-primary">1</span>
+            Type a project name and click Create project
+          </li>
+          <li className="rounded-md border border-border bg-card/60 px-3 py-2">
+            <span className="mr-2 font-semibold text-foreground">2</span>
+            Open an IFC (or drop it on this screen)
+          </li>
+          <li className="rounded-md border border-border bg-card/60 px-3 py-2">
+            <span className="mr-2 font-semibold text-foreground">3</span>
+            Work in 3D — it is stored under this project
+          </li>
+        </ol>
+      ) : null}
 
       {needsProject ? (
         <ProjectCreateForm
@@ -68,36 +80,36 @@ export function EmptyState({
           <button
             type="button"
             onClick={onOpen}
-            className="inline-flex h-9 items-center gap-2 rounded bg-primary px-4 text-[13px] font-medium text-white"
+            className="inline-flex h-10 items-center gap-2 rounded bg-primary px-4 text-[13px] font-medium text-white"
           >
             <Upload className="h-4 w-4" />
-            Load IFC
+            Open IFC file
           </button>
           <button
             type="button"
             onClick={onSample}
-            className="inline-flex h-9 items-center rounded border border-border px-4 text-[13px]"
+            className="inline-flex h-10 items-center rounded border border-border px-4 text-[13px]"
           >
-            Load two-wall sample
+            Try the two-wall demo
           </button>
           {onDismiss ? (
             <button
               type="button"
               onClick={onDismiss}
-              className="inline-flex h-9 items-center rounded border border-border px-4 text-[13px]"
+              className="inline-flex h-10 items-center rounded border border-border px-4 text-[13px]"
             >
-              Back to model
+              Return to 3D view
             </button>
           ) : null}
         </div>
       )}
 
       {projectsEnabled && projects.length > 0 ? (
-        <div className="w-full max-w-lg space-y-2 text-left">
+        <div className="w-full max-w-xl space-y-2 text-left">
           <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            Recent projects
+            Open a saved project
           </p>
-          <ul className="max-h-56 overflow-auto rounded border border-border bg-card">
+          <ul className="max-h-56 overflow-auto rounded-md border border-border bg-card">
             {projects.map((project) => (
               <li key={project.id}>
                 <button
@@ -111,15 +123,15 @@ export function EmptyState({
                   <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                   <span className="min-w-0 flex-1 truncate font-medium">{project.name}</span>
                   <span className="truncate text-[11px] text-muted-foreground">
-                    {project.fileName ?? 'No model yet'}
+                    {project.fileName ? `Open ${project.fileName}` : 'No IFC yet'}
                   </span>
                 </button>
               </li>
             ))}
           </ul>
         </div>
-      ) : projectsEnabled ? (
-        <p className="text-[12px] text-muted-foreground">No projects yet — enter a name above.</p>
+      ) : projectsEnabled && needsProject ? (
+        <p className="text-[12px] text-muted-foreground">No saved projects yet.</p>
       ) : null}
     </div>
   )
@@ -134,7 +146,7 @@ function ProjectCreateForm({
 }) {
   return (
     <form
-      className="flex w-full max-w-lg flex-wrap items-center justify-center gap-2"
+      className="flex w-full max-w-xl flex-wrap items-center justify-center gap-2"
       onSubmit={(event) => {
         event.preventDefault()
         const form = event.currentTarget
@@ -150,14 +162,14 @@ function ProjectCreateForm({
         type="text"
         required
         autoFocus
-        placeholder="Project name"
+        placeholder="e.g. Tower A – Level 3"
         disabled={disabled}
-        className="h-9 min-w-48 flex-1 rounded border border-border bg-background px-3 text-[13px] outline-none focus:border-primary"
+        className="h-10 min-w-48 flex-1 rounded border border-border bg-background px-3 text-[13px] outline-none focus:border-primary"
       />
       <button
         type="submit"
         disabled={disabled}
-        className="inline-flex h-9 items-center gap-2 rounded bg-primary px-4 text-[13px] font-medium text-white disabled:opacity-50"
+        className="inline-flex h-10 items-center gap-2 rounded bg-primary px-4 text-[13px] font-medium text-white disabled:opacity-50"
       >
         <FolderPlus className="h-4 w-4" />
         Create project

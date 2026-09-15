@@ -67,14 +67,14 @@ export function emptySession(cacheKey = '', fileName = ''): ProjectSession {
   }
 }
 
-/** Drop overlay triangle buffers so session.json stays small. Metrics still restore. */
+/** Keep quantity totals; drop per-face data so session writes stay cheap. */
 export function persistableQuantities(result: QuantityResult | null): QuantityResult | null {
   if (!result) return null
   return {
     ...result,
     elements: result.elements.map((element) => ({
       ...element,
-      faces: element.faces.map((face) => ({ ...face, positions: [] })),
+      faces: [],
     })),
   }
 }

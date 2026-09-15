@@ -34,3 +34,8 @@ codegen-units = 1
 lto = true
 opt-level = 3
 strip = true
+
+# `tauri dev` uses the debug profile. Leave the app crate unoptimized for
+# rebuild speed, but compile the tessellator at -O3 or large models crawl.
+[profile.dev.package.ifc-lite-processing]
+opt-level = 3

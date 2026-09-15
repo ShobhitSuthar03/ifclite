@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MeshData } from '@ifc-lite/geometry'
 import { AppHeader } from '@/components/app-header'
 import { EmptyState } from '@/components/empty-state'
+import { LoadingOverlay } from '@/components/loading-overlay'
 import { LeftDock, type LeftTab } from '@/components/left-dock'
 import { ResizeHandle } from '@/components/resize-handle'
 import { RightDock, type RightTab } from '@/components/right-dock'
@@ -140,6 +141,7 @@ export default function App() {
   const [meshes, setMeshes] = useState<MeshData[]>([])
   const [result, setResult] = useState<LoadResult | null>(null)
   const [progress, setProgress] = useState<LoadProgress | null>(null)
+  const [loadingName, setLoadingName] = useState<string | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set())
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -184,6 +186,8 @@ export default function App() {
   const pendingSession = useRef<ProjectSession | null>(null)
   const pendingWarehouse = useRef<Uint8Array | null>(null)
   const warehouseRestored = useRef(false)
+  const pendingMeshes = useRef<MeshData[]>([])
+  const meshRaf = useRef(0)
   const rowRef = useRef<HTMLDivElement>(null)
   const leftPaneRef = useRef<HTMLDivElement>(null)
   const rightPaneRef = useRef<HTMLDivElement>(null)
@@ -225,7 +229,7 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!store || !result) return
+    if (!store || !result || parsing) return
     let cancelled = false
     setWarehouseBusy(true)
     void (async () => {
@@ -278,7 +282,7 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [store, spatialRoot, result, project])
+  }, [store, spatialRoot, result, project, parsing])
 
   useEffect(() => {
     if (!warehouse || !quantities) return
@@ -289,7 +293,9 @@ export default function App() {
   const load = useCallback(async (source: LoadSource) => {
     const gen = loadGen.current + 1
     loadGen.current = gen
+    setHomeOpen(false)
     setBusy(true)
+    setLoadingName(source.name)
     setParsing(true)
     setError(null)
     setSelectedId(null)
@@ -324,6 +330,31 @@ export default function App() {
     setLeftTab('tree')
     setRightTab('properties')
 
+    pendingMeshes.current = []
+    if (meshRaf.current) {
+      cancelAnimationFrame(meshRaf.current)
+      meshRaf.current = 0
+    }
+
+    const flushMeshes = () => {
+      const extra = pendingMeshes.current
+      pendingMeshes.current = []
+      meshRaf.current = 0
+      if (loadGen.current !== gen || extra.length === 0) return
+      setMeshes((current) => current.concat(extra))
+    }
+
+    let lastProgressAt = 0
+    const onProgress = (next: LoadProgress) => {
+      if (loadGen.current !== gen) return
+      const now = performance.now()
+      if (next.phase === 'geometry' && now - lastProgressAt < 120 && next.processed < (next.total || Number.MAX_SAFE_INTEGER)) {
+        return
+      }
+      lastProgressAt = now
+      setProgress(next)
+    }
+
     const parserTask = resolveSourceBytes(source)
       .then((buffer) => {
         if (loadGen.current === gen) setSourceBytes(new Uint8Array(buffer))
@@ -349,12 +380,16 @@ export default function App() {
     try {
       const next = await loadIfcModel(
         source,
-        setProgress,
+        onProgress,
         (batch) => {
           if (loadGen.current !== gen) return
-          setMeshes((current) => current.concat(batch))
+          pendingMeshes.current.push(...batch)
+          if (meshRaf.current) return
+          meshRaf.current = requestAnimationFrame(flushMeshes)
         },
       )
+      if (meshRaf.current) cancelAnimationFrame(meshRaf.current)
+      flushMeshes()
       if (loadGen.current !== gen) return
       setResult(next)
       setFitToken((token) => token + 1)
@@ -367,6 +402,7 @@ export default function App() {
       if (loadGen.current !== gen) return
       const message = caught instanceof Error ? caught.message : String(caught)
       setError(message)
+      setHomeOpen(true)
     } finally {
       if (loadGen.current === gen) setBusy(false)
       await parserTask
@@ -611,7 +647,7 @@ export default function App() {
       void saveProjectSession(session).catch((caught) => {
         console.warn('Could not save session.json', caught)
       })
-    }, 600)
+    }, 1800)
     return () => window.clearTimeout(timer)
   }, [
     project,
@@ -680,14 +716,11 @@ export default function App() {
 
   useEffect(() => {
     hoverLookupRef.current = (id: number) => {
-      const type =
-        store?.entities.getTypeName(id) ??
-        meshes.find((mesh) => mesh.expressId === id)?.ifcType ??
-        'IfcProduct'
+      const type = store?.entities.getTypeName(id) ?? 'IfcProduct'
       const name = store?.entities.getName(id)
       return name ? `${type} ${name}` : `${type} #${id}`
     }
-  }, [store, meshes])
+  }, [store])
 
   const onHover = useCallback((id: number | null) => {
     hoverBindRef.current?.(id)
@@ -878,14 +911,19 @@ export default function App() {
     return `LATERAL ${lateral.toFixed(2)} · NET ${net.toFixed(2)} m²`
   }, [quantities, selectedIds])
 
+  const reportsOpen =
+    leftTab === 'reports' ||
+    rightTab === 'dashboard' ||
+    mobileTab === 'reports' ||
+    mobileTab === 'dashboard'
   const reportScope = followViewer && selectedIds.size > 0 ? selectedIds : isolatedIds
   const reportOptions: FilterOptions | null = useMemo(() => {
-    if (!warehouse) return null
+    if (!warehouse || !reportsOpen) return null
     void reportTick
     return loadFilterOptions(warehouse)
-  }, [warehouse, reportTick])
+  }, [warehouse, reportTick, reportsOpen])
   const report: ReportResult | null = useMemo(() => {
-    if (!warehouse) return null
+    if (!warehouse || !reportsOpen) return null
     void reportTick
     try {
       return runReport(warehouse, reportTemplate, reportFilter, reportGroupBy, reportMetrics, reportScope)
@@ -893,7 +931,7 @@ export default function App() {
       console.warn('Report query failed', caught)
       return null
     }
-  }, [warehouse, reportTick, reportTemplate, reportFilter, reportGroupBy, reportMetrics, reportScope])
+  }, [warehouse, reportTick, reportTemplate, reportFilter, reportGroupBy, reportMetrics, reportScope, reportsOpen])
 
   const onReportRow = useCallback(
     (row: ReportRow) => {
@@ -1143,6 +1181,9 @@ export default function App() {
           onDragLeave={() => setDragActive(false)}
           onDrop={onDrop}
         >
+          {(busy || (progress != null && progress.phase !== 'complete')) && (
+            <LoadingOverlay progress={progress} parsing={parsing} fileName={loadingName ?? heading} />
+          )}
           {empty ? projectHome : (
             <ViewerCanvas
               meshes={meshes}

@@ -65,7 +65,7 @@ describe('project session', () => {
       netArea: 2,
     }
     const saved = persistableQuantities(result)
-    expect(saved?.elements[0]?.faces[0]?.positions).toEqual([])
+    expect(saved?.elements[0]?.faces).toEqual([])
     expect(saved?.elements[0]?.metrics.LATERALAREA).toBe(2)
   })
 

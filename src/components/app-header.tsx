@@ -44,15 +44,15 @@ export function AppHeader({
         <ThemeSwitch />
         {onProjects ? (
           <Button variant="outline" size="sm" onClick={onProjects} disabled={busy}>
-            Projects
+            My projects
           </Button>
         ) : null}
         <Button variant="outline" size="sm" onClick={onSample} disabled={busy || !canLoad}>
-          Sample
+          Demo
         </Button>
         <Button size="sm" onClick={onOpen} disabled={busy || !canLoad}>
           {busy ? <Loader2 className="animate-spin" /> : <FolderOpen />}
-          Load IFC
+          {busy ? 'Opening…' : 'Open IFC'}
         </Button>
       </div>
     </header>
