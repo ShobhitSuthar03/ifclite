@@ -5,12 +5,14 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{AppHandle, Manager, State};
 
 const ROOT_FOLDER: &str = "IFCLite";
 const PROJECT_FILE: &str = "project.json";
 const SESSION_FILE: &str = "session.json";
 const WAREHOUSE_FILE: &str = "warehouse.sqlite";
+const QUANTITIES_FILE: &str = "quantities.json";
 const MODEL_FILE: &str = "model.ifc";
 const CATALOG_FILE: &str = "catalog.json";
 const GEOMETRY_FOLDER: &str = "geometry";
@@ -37,7 +39,14 @@ pub struct ProjectSnapshot {
     pub model_path: Option<String>,
     pub geometry_dir: String,
     pub session_json: Option<String>,
-    pub warehouse: Option<Vec<u8>>,
+    /// Whether `warehouse.sqlite` exists for this project. The bytes themselves are
+    /// fetched separately via `get_project_warehouse`, as a raw IPC response, so this
+    /// (often large) file isn't read from disk and JSON-encoded on every project open
+    /// whether or not the caller ends up needing it.
+    pub has_warehouse: bool,
+    /// Whether a full (geometry included) quantity takeoff was saved for this project.
+    /// Fetched separately via `get_project_quantities`, same reasoning as `has_warehouse`.
+    pub has_quantities: bool,
     pub has_geometry_cache: bool,
 }
 
@@ -216,6 +225,7 @@ fn snapshot_of(project: &ProjectRecord) -> ProjectSnapshot {
     let geometry_dir = folder.join(GEOMETRY_FOLDER);
     let session_path = folder.join(SESSION_FILE);
     let warehouse_path = folder.join(WAREHOUSE_FILE);
+    let quantities_path = folder.join(QUANTITIES_FILE);
     let cache_key = project.cache_key.clone().unwrap_or_default();
     let has_geometry_cache = if cache_key.is_empty() {
         false
@@ -237,7 +247,8 @@ fn snapshot_of(project: &ProjectRecord) -> ProjectSnapshot {
             .map(|path| path.to_string_lossy().to_string()),
         geometry_dir: geometry_dir.to_string_lossy().to_string(),
         session_json: fs::read_to_string(session_path).ok(),
-        warehouse: fs::read(warehouse_path).ok(),
+        has_warehouse: warehouse_path.exists(),
+        has_quantities: quantities_path.exists(),
         has_geometry_cache,
     }
 }
@@ -348,6 +359,7 @@ pub fn import_ifc_path(
     fs::copy(&path, &dest).map_err(|err| format!("failed to copy IFC into the project: {err}"))?;
     let _ = fs::remove_file(folder.join(SESSION_FILE));
     let _ = fs::remove_file(folder.join(WAREHOUSE_FILE));
+    let _ = fs::remove_file(folder.join(QUANTITIES_FILE));
     let bytes = fs::read(&dest).map_err(|err| err.to_string())?;
     project.model_file = Some(MODEL_FILE.to_string());
     project.file_name = Some(file_name.unwrap_or_else(|| {
@@ -364,22 +376,59 @@ pub fn import_ifc_path(
     Ok(snapshot_of(&project))
 }
 
+/// Percent-decodes a header value (mirrors `encodeURIComponent` on the JS side).
+/// Header values are restricted to visible ASCII, so a project/file name with
+/// non-ASCII or reserved characters must be escaped by the caller before being
+/// sent as a header.
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
+                if let Ok(value) = u8::from_str_radix(hex, 16) {
+                    out.push(value);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn raw_body<'a>(request: &'a Request<'a>) -> Result<&'a [u8], String> {
+    match request.body() {
+        InvokeBody::Raw(bytes) => Ok(bytes.as_slice()),
+        InvokeBody::Json(_) => Err("expected a raw bytes body".to_string()),
+    }
+}
+
 #[tauri::command]
 pub fn import_ifc_bytes(
     book: State<'_, ProjectBook>,
-    file_name: String,
-    bytes: Vec<u8>,
+    request: Request<'_>,
 ) -> Result<ProjectSnapshot, String> {
+    let file_name = request
+        .headers()
+        .get("x-file-name")
+        .and_then(|value| value.to_str().ok())
+        .map(percent_decode);
+    let bytes = raw_body(&request)?;
     let mut project = require_current(&book)?;
     let folder = PathBuf::from(&project.folder_path);
     let dest = folder.join(MODEL_FILE);
-    fs::write(&dest, &bytes).map_err(|err| format!("failed to write IFC into the project: {err}"))?;
+    fs::write(&dest, bytes).map_err(|err| format!("failed to write IFC into the project: {err}"))?;
     let _ = fs::remove_file(folder.join(SESSION_FILE));
     let _ = fs::remove_file(folder.join(WAREHOUSE_FILE));
+    let _ = fs::remove_file(folder.join(QUANTITIES_FILE));
     project.model_file = Some(MODEL_FILE.to_string());
     project.original_path = None;
-    project.file_name = Some(file_name);
-    project.cache_key = Some(hash_bytes(&bytes));
+    project.file_name = Some(file_name.unwrap_or_else(|| MODEL_FILE.to_string()));
+    project.cache_key = Some(hash_bytes(bytes));
     project.updated_at_ms = now_ms();
     save_project(&project)?;
     book.set_current(project.clone());
@@ -394,10 +443,128 @@ pub fn save_project_session(book: State<'_, ProjectBook>, json: String) -> Resul
 }
 
 #[tauri::command]
-pub fn save_project_warehouse(book: State<'_, ProjectBook>, bytes: Vec<u8>) -> Result<(), String> {
+pub fn save_project_warehouse(book: State<'_, ProjectBook>, request: Request<'_>) -> Result<(), String> {
+    let bytes = raw_body(&request)?;
     let project = require_current(&book)?;
     let path = PathBuf::from(&project.folder_path).join(WAREHOUSE_FILE);
     fs::write(path, bytes).map_err(|err| err.to_string())
+}
+
+/// Companion to `save_project_warehouse`: returns `warehouse.sqlite`'s bytes as a raw
+/// IPC response (see `read_ifc_bytes` for why - avoids a JSON number-array roundtrip
+/// for what can be a multi-hundred-MB file).
+#[tauri::command]
+pub fn get_project_warehouse(book: State<'_, ProjectBook>) -> Result<Response, String> {
+    let project = require_current(&book)?;
+    let path = PathBuf::from(&project.folder_path).join(WAREHOUSE_FILE);
+    let bytes = fs::read(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    Ok(Response::new(bytes))
+}
+
+/// Full (per-face geometry included) quantity takeoff, saved separately from
+/// session.json so reopening a project doesn't have to recompute it - it's kept out
+/// of session.json itself because it can be considerably larger than the rest of the
+/// session state and doesn't need to be rewritten on every ordinary session save.
+#[tauri::command]
+pub fn save_project_quantities(book: State<'_, ProjectBook>, request: Request<'_>) -> Result<(), String> {
+    let bytes = raw_body(&request)?;
+    let project = require_current(&book)?;
+    let path = PathBuf::from(&project.folder_path).join(QUANTITIES_FILE);
+    fs::write(path, bytes).map_err(|err| err.to_string())
+}
+
+/// Companion to `save_project_quantities`, returned as a raw IPC response (see
+/// `read_ifc_bytes`).
+#[tauri::command]
+pub fn get_project_quantities(book: State<'_, ProjectBook>) -> Result<Response, String> {
+    let project = require_current(&book)?;
+    let path = PathBuf::from(&project.folder_path).join(QUANTITIES_FILE);
+    let bytes = fs::read(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    Ok(Response::new(bytes))
+}
+
+/// One entry from the app's `MutationPatch[]` (property/attribute edit overlay) -
+/// same shape, so the frontend can pass its mutation list straight through.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MutationPatchDto {
+    pub express_id: i64,
+    pub kind: String,
+    pub name: String,
+    pub value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pset: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportRequest {
+    source_path: String,
+    output_path: String,
+    mutations: Vec<MutationPatchDto>,
+}
+
+/// Bakes the mutation overlay (property/attribute edits, including anything
+/// registered from the manual takeoff basket) into a real IFC file via a bundled
+/// Python + ifcopenshell script - `@ifc-lite/*` doesn't ship a STEP writer yet, and
+/// ifcopenshell is the standard tool for this rather than hand-rolling one.
+#[tauri::command]
+pub fn export_ifc(
+    app: AppHandle,
+    book: State<'_, ProjectBook>,
+    mutations: Vec<MutationPatchDto>,
+    output_path: String,
+) -> Result<String, String> {
+    let project = require_current(&book)?;
+    let model_file = project
+        .model_file
+        .clone()
+        .ok_or_else(|| "project has no model file to export".to_string())?;
+    let source_path = PathBuf::from(&project.folder_path).join(model_file);
+
+    let script_path = app
+        .path()
+        .resolve("scripts/export_ifc.py", tauri::path::BaseDirectory::Resource)
+        .map_err(|err| format!("failed to locate export_ifc.py: {err}"))?;
+
+    let request = ExportRequest {
+        source_path: source_path.to_string_lossy().to_string(),
+        output_path: output_path.clone(),
+        mutations,
+    };
+    let request_json = serde_json::to_string(&request).map_err(|err| err.to_string())?;
+    let request_path = std::env::temp_dir().join(format!("ifclite-export-{}.json", now_ms()));
+    fs::write(&request_path, request_json).map_err(|err| err.to_string())?;
+
+    let run = std::process::Command::new("python")
+        .arg(&script_path)
+        .arg(&request_path)
+        .output();
+    let _ = fs::remove_file(&request_path);
+    let output = run.map_err(|err| format!("failed to run export_ifc.py (is Python installed?): {err}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let last_line = stdout.lines().last().unwrap_or("");
+    let parsed: serde_json::Value = serde_json::from_str(last_line).map_err(|_| {
+        format!(
+            "export_ifc.py produced no usable output: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })?;
+
+    if parsed.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+        Ok(parsed
+            .get("outputPath")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&output_path)
+            .to_string())
+    } else {
+        Err(parsed
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("export failed")
+            .to_string())
+    }
 }
 
 #[cfg(test)]

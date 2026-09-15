@@ -8,6 +8,7 @@ use crate::types::{
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::sync::Arc;
+use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
@@ -75,9 +76,13 @@ pub fn hash_ifc_path(path: String) -> Result<String, String> {
     Ok(hash_bytes(&bytes))
 }
 
+/// Returns the file as a raw IPC response instead of a `Vec<u8>` (which Tauri would
+/// otherwise serialize as a JSON array of numbers - prohibitively slow/large for
+/// a multi-hundred-MB IFC file).
 #[tauri::command]
-pub fn read_ifc_bytes(path: String) -> Result<Vec<u8>, String> {
-    fs::read(&path).map_err(|err| format!("failed to read {path}: {err}"))
+pub fn read_ifc_bytes(path: String) -> Result<Response, String> {
+    let bytes = fs::read(&path).map_err(|err| format!("failed to read {path}: {err}"))?;
+    Ok(Response::new(bytes))
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {

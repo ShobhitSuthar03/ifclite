@@ -59,9 +59,23 @@ describe('isBuildingElementType', () => {
     expect(isBuildingElementType('IfcSpace')).toBe(false)
     expect(isBuildingElementType('IfcOpeningElement')).toBe(false)
   })
+
+  it('fails open for meshes with no known ifcType, such as desktop packed-cache geometry', () => {
+    expect(isBuildingElementType(undefined)).toBe(true)
+    expect(isBuildingElementType('IfcProduct')).toBe(true)
+  })
 })
 
 describe('computeElementQuantities', () => {
+  it('still includes elements when ifcType is missing (desktop packed geometry cache)', () => {
+    const column = boxMesh(10, 'IfcColumn', [0, 0, 0], [0.4, 3, 0.4])
+    const { ifcType: _ifcType, ...untyped } = column
+    void _ifcType
+    const result = computeElementQuantities([untyped])
+    expect(result.elementCount).toBe(1)
+    almost(result.elements[0].metrics.VOLUME, 0.48)
+  })
+
   it('fills area metrics for an isolated rectangular column', () => {
     const column = boxMesh(10, 'IfcColumn', [0, 0, 0], [0.4, 3, 0.4])
     const result = computeElementQuantities([column])

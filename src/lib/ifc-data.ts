@@ -5,6 +5,7 @@ import {
   extractQuantitiesOnDemand,
   type IfcDataStore,
 } from '@ifc-lite/parser'
+import { WorkerParser } from '@ifc-lite/parser/browser'
 import { IfcTypeEnum, type SpatialNode } from '@ifc-lite/data'
 
 export type { IfcDataStore }
@@ -43,10 +44,27 @@ export type SpatialTreeNode = {
   totalElements: number
 }
 
+/**
+ * The full IFC property/spatial parse is CPU-heavy (seconds on a large file) and
+ * runs concurrently with Rust's own tessellation pass, so keeping it on the main
+ * thread would freeze the UI for that whole window. Offload it to WorkerParser
+ * when the runtime supports it (Worker + SharedArrayBuffer + cross-origin
+ * isolation - see the COOP/COEP headers in vite.config.ts and tauri.conf.json),
+ * falling back to the in-process parser otherwise.
+ */
 export async function buildDataStore(
   buffer: ArrayBuffer,
   onSpatialReady?: (store: IfcDataStore) => void,
 ): Promise<IfcDataStore> {
+  if (WorkerParser.isSupported()) {
+    try {
+      const shared = new SharedArrayBuffer(buffer.byteLength)
+      new Uint8Array(shared).set(new Uint8Array(buffer))
+      return await new WorkerParser().parseColumnar(shared, { onSpatialReady })
+    } catch (caught) {
+      console.warn('WorkerParser failed; falling back to main-thread IFC parse', caught)
+    }
+  }
   return new IfcParser().parseColumnar(buffer, { onSpatialReady })
 }
 

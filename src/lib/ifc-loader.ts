@@ -315,5 +315,8 @@ export async function resolveSourceBytes(source: LoadSource): Promise<ArrayBuffe
 }
 
 async function readPathBytes(path: string): Promise<Uint8Array> {
-  return invoke<number[]>('read_ifc_bytes', { path }).then((values) => Uint8Array.from(values))
+  // read_ifc_bytes returns a raw IPC response (ArrayBuffer), not a JSON number
+  // array - avoids a hugely expensive JSON encode/decode for large IFC files.
+  const buffer = await invoke<ArrayBuffer>('read_ifc_bytes', { path })
+  return new Uint8Array(buffer)
 }

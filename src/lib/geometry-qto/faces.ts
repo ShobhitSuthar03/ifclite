@@ -215,7 +215,11 @@ export function isColumnType(ifcType: string | undefined): boolean {
 }
 
 export function isBuildingElementType(ifcType: string | undefined): boolean {
-  if (!ifcType) return true
+  // 'IfcProduct' is the sentinel extractFaces() substitutes when a mesh carries no
+  // ifcType (e.g. desktop's packed geometry cache, which doesn't roundtrip the type).
+  // It is an abstract IFC class no real element ever reports, so treat it the same
+  // as "unknown" rather than letting it fail every type-name check below.
+  if (!ifcType || ifcType === 'IfcProduct') return true
   if (/openingelement|ifcspace\b|ifcsite\b|ifcproject\b|ifcbuildingstorey|annotation|ifcgrid\b|distribution|flowterminal|furnishing|spatialzone|virtualelement/i.test(ifcType)) {
     return false
   }

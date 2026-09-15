@@ -4,9 +4,10 @@ import {
   extractQuantitiesOnDemand,
   type IfcDataStore,
 } from '@ifc-lite/parser'
-import { MutablePropertyView } from '@ifc-lite/mutations'
-import type { PropertyValue, QuantitySet } from '@ifc-lite/data'
+import { MutablePropertyView, type PropertyExtractor, type QuantityExtractor } from '@ifc-lite/mutations'
+import { PropertyValueType, QuantityType, type PropertyValue, type QuantitySet } from '@ifc-lite/data'
 import type { EntityData } from '@/lib/ifc-data'
+import { all, type BimDatabase } from '@/lib/bim-sql/database'
 
 export function createMutationView(store: IfcDataStore): MutablePropertyView {
   const view = new MutablePropertyView(null, 'model')
@@ -22,6 +23,91 @@ export function createMutationView(store: IfcDataStore): MutablePropertyView {
     if (key === 'objecttype') return attrs.objectType ?? null
     if (key === 'tag') return attrs.tag ?? null
     if (key === 'globalid') return attrs.globalId ?? null
+    return null
+  })
+  return view
+}
+
+function inferQuantityType(unit: string | null | undefined): QuantityType {
+  if (!unit) return QuantityType.Number
+  if (unit.includes('³')) return QuantityType.Volume
+  if (unit.includes('²')) return QuantityType.Area
+  const lower = unit.toLowerCase()
+  if (lower === 'm' || lower === 'mm' || lower === 'ft' || lower === 'in') return QuantityType.Length
+  if (lower.includes('kg') || lower.includes('ton') || lower === 't') return QuantityType.Weight
+  return QuantityType.Number
+}
+
+function warehousePropertyExtractor(db: BimDatabase): PropertyExtractor {
+  return (entityId) => {
+    const rows = all<{ pset: string; name: string; value: string | null }>(
+      db,
+      'SELECT pset, name, value FROM element_properties WHERE express_id = ? ORDER BY pset, name',
+      [entityId],
+    )
+    const sets = new Map<string, { name: string; properties: Array<{ name: string; type: number; value: unknown }> }>()
+    for (const row of rows) {
+      const set = sets.get(row.pset) ?? { name: row.pset, properties: [] }
+      set.properties.push({ name: row.name, type: PropertyValueType.String, value: row.value })
+      sets.set(row.pset, set)
+    }
+    return [...sets.values()]
+  }
+}
+
+function warehouseQuantityExtractor(db: BimDatabase): QuantityExtractor {
+  return (entityId) => {
+    const rows = all<{ qset: string; name: string; value: number | null; unit: string | null }>(
+      db,
+      'SELECT qset, name, value, unit FROM quantities WHERE express_id = ? ORDER BY qset, name',
+      [entityId],
+    )
+    const sets = new Map<string, QuantitySet>()
+    for (const row of rows) {
+      const set = sets.get(row.qset) ?? { name: row.qset, quantities: [] }
+      set.quantities.push({
+        name: row.name,
+        type: inferQuantityType(row.unit),
+        value: row.value ?? 0,
+        unit: row.unit ?? undefined,
+      })
+      sets.set(row.qset, set)
+    }
+    return [...sets.values()]
+  }
+}
+
+/**
+ * Warehouse-backed counterpart to createMutationView: a project reopened from
+ * warehouse.sqlite has no live IfcDataStore (that's the whole point of skipping
+ * re-parse), so property/attribute edits need their "base" values read from the
+ * warehouse instead. Without this, MutablePropertyView had no base data source in
+ * that mode, and overlaying its (empty) output onto an entity's properties would
+ * have replaced the warehouse's real property sets with just the edited ones.
+ */
+export function createWarehouseMutationView(db: BimDatabase): MutablePropertyView {
+  const view = new MutablePropertyView(null, 'model')
+  view.setOnDemandExtractor(warehousePropertyExtractor(db))
+  view.setQuantityExtractor(warehouseQuantityExtractor(db))
+  view.setAttributeExtractor((entityId, attrName) => {
+    const row = all<{
+      global_id: string | null
+      name: string | null
+      description: string | null
+      object_type: string | null
+      tag: string | null
+    }>(
+      db,
+      'SELECT global_id, name, description, object_type, tag FROM elements WHERE express_id = ? LIMIT 1',
+      [entityId],
+    )[0]
+    if (!row) return null
+    const key = attrName.toLowerCase()
+    if (key === 'name') return row.name ?? null
+    if (key === 'description') return row.description ?? null
+    if (key === 'objecttype') return row.object_type ?? null
+    if (key === 'tag') return row.tag ?? null
+    if (key === 'globalid') return row.global_id ?? null
     return null
   })
   return view

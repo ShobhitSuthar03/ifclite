@@ -32,6 +32,8 @@ type RightDockProps = {
   selectedIds: Set<number>
   formwork: QuantityResult | null
   quantityBusy: boolean
+  selectedFaceId?: string | null
+  onSelectFace?: (faceId: string | null) => void
   onExported: (message: string) => void
   onError: (message: string) => void
   report: ReportResult | null
@@ -64,6 +66,8 @@ export function RightDock({
   selectedIds,
   formwork,
   quantityBusy,
+  selectedFaceId = null,
+  onSelectFace,
   onExported,
   onError,
   report,
@@ -110,6 +114,8 @@ export function RightDock({
             busy={quantityBusy}
             selectedIds={selectedIds}
             isolatedIds={isolatedIds}
+            selectedFaceId={selectedFaceId}
+            onSelectFace={onSelectFace}
           />
         ) : tab === 'dashboard' ? (
           <DashboardPanel

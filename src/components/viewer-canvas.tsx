@@ -1,11 +1,18 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import type { MeshData } from '@ifc-lite/geometry'
 import type { FaceQuantity } from '@/lib/geometry-qto'
 import { FaceLayerLegend } from '@/components/face-layer-legend'
 import { applyCameraFit } from '@/lib/fit-camera'
-import { addQuantityFaceOverlay, clearObject3d, toggleFaceLayer, type FaceLayer } from '@/lib/geometry-qto/overlay-mesh'
+import {
+  addBasketFaceOverlay,
+  addQuantityFaceOverlay,
+  buildFaceOutline,
+  clearObject3d,
+  toggleFaceLayer,
+  type FaceLayer,
+} from '@/lib/geometry-qto/overlay-mesh'
 import { meshDataToThree } from '@/lib/mesh-to-three'
 import { isAdditiveModifier } from '@/lib/selection'
 import { VIEWPORT_THEME, type Theme } from '@/lib/theme'
@@ -25,6 +32,16 @@ type ViewerCanvasProps = {
   theme: Theme
   overlayFaces?: FaceQuantity[] | null
   colorOverrides?: Map<number, [number, number, number, number]> | null
+  selectedFaceId?: string | null
+  onSelectFace?: (faceId: string | null) => void
+  /** Faces manually gathered into the takeoff "basket" - highlighted regardless of
+   * Native/Calculated view, since building the basket doesn't require the QTO overlay. */
+  basketFaces?: FaceQuantity[] | null
+  /** Fires on every click with the raw hit geometry (not tied to the QTO overlay),
+   * so the caller can match it against on-demand face data for basket picking. */
+  onFaceCandidate?: (info: { expressId: number; point: [number, number, number]; normal: [number, number, number] } | null) => void
+  onRegisterBasket?: () => void
+  onClearBasket?: () => void
 }
 
 export const ViewerCanvas = memo(function ViewerCanvas({
@@ -40,18 +57,34 @@ export const ViewerCanvas = memo(function ViewerCanvas({
   theme,
   overlayFaces = null,
   colorOverrides = null,
+  selectedFaceId = null,
+  onSelectFace,
+  basketFaces = null,
+  onFaceCandidate,
+  onRegisterBasket,
+  onClearBasket,
 }: ViewerCanvasProps) {
   const [faceLayers, setFaceLayers] = useState<Set<FaceLayer>>(() => new Set(['all']))
 
   useEffect(() => {
     setFaceLayers(new Set(['all']))
   }, [selectedIds])
+
+  // Elements currently shown by the overlay - independent of selection, since the
+  // overlay reflects the last calculation, not the current pick.
+  const overlayIds = useMemo(() => {
+    if (!overlayFaces || overlayFaces.length === 0) return null
+    const ids = new Set<number>()
+    for (const face of overlayFaces) ids.add(face.expressId)
+    return ids
+  }, [overlayFaces])
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
   const controlsRef = useRef<OrbitControls | null>(null)
   const modelGroupRef = useRef<THREE.Group | null>(null)
   const overlayGroupRef = useRef<THREE.Group | null>(null)
+  const basketGroupRef = useRef<THREE.Group | null>(null)
   const gridRef = useRef<THREE.GridHelper | null>(null)
   const sceneRef = useRef<THREE.Scene | null>(null)
   const meshIndexRef = useRef(0)
@@ -64,18 +97,23 @@ export const ViewerCanvas = memo(function ViewerCanvas({
   const viewIsolateRef = useRef<Set<number> | null>(null)
   const onSelectRef = useRef(onSelect)
   const onHoverRef = useRef(onHover)
+  const onSelectFaceRef = useRef(onSelectFace)
+  const onFaceCandidateRef = useRef(onFaceCandidate)
   const requestRenderRef = useRef<() => void>(() => {})
   const themeRef = useRef(theme)
   const appliedThemeRef = useRef<Theme | null>(null)
+  const faceOutlineRef = useRef<THREE.LineSegments | null>(null)
 
   useEffect(() => {
     onSelectRef.current = onSelect
     onHoverRef.current = onHover
+    onSelectFaceRef.current = onSelectFace
+    onFaceCandidateRef.current = onFaceCandidate
     isolatedRef.current = isolatedIds
     hiddenRef.current = hiddenIds
     ghostRef.current = ghostIds
     viewIsolateRef.current = viewIsolateIds
-  }, [onSelect, onHover, isolatedIds, hiddenIds, ghostIds, viewIsolateIds])
+  }, [onSelect, onHover, onSelectFace, onFaceCandidate, isolatedIds, hiddenIds, ghostIds, viewIsolateIds])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -136,12 +174,17 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     overlayGroup.name = 'qto-overlay'
     overlayGroup.renderOrder = 2
     scene.add(overlayGroup)
+    const basketGroup = new THREE.Group()
+    basketGroup.name = 'qto-basket'
+    basketGroup.renderOrder = 3
+    scene.add(basketGroup)
 
     cameraRef.current = camera
     rendererRef.current = renderer
     controlsRef.current = controls
     modelGroupRef.current = modelGroup
     overlayGroupRef.current = overlayGroup
+    basketGroupRef.current = basketGroup
     gridRef.current = grid
     sceneRef.current = scene
     appliedThemeRef.current = themeRef.current
@@ -196,7 +239,13 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     const raycaster = new THREE.Raycaster()
     raycaster.layers.enableAll()
     const pointer = new THREE.Vector2()
-    const pickAt = (clientX: number, clientY: number): number | null => {
+    type Pick = {
+      expressId: number
+      faceId: string | null
+      point?: [number, number, number]
+      normal?: [number, number, number]
+    }
+    const pickAt = (clientX: number, clientY: number): Pick | null => {
       const rect = canvas.getBoundingClientRect()
       pointer.set(
         ((clientX - rect.left) / rect.width) * 2 - 1,
@@ -223,7 +272,19 @@ export const ViewerCanvas = memo(function ViewerCanvas({
         })
         if (!hit) continue
         const expressId = hit.object.userData.expressId as number | undefined
-        return expressId ?? null
+        if (expressId == null) return null
+        const faceId = (hit.object.userData.faceId as string | undefined) ?? null
+        if (faceId) return { expressId, faceId }
+        // A native-mesh hit has no faceId - report the raw hit geometry so the
+        // caller can match it against on-demand face data (basket picking).
+        const point: [number, number, number] = [hit.point.x, hit.point.y, hit.point.z]
+        const localNormal = hit.face?.normal
+        let normal: [number, number, number] | undefined
+        if (localNormal) {
+          const worldNormal = localNormal.clone().transformDirection(hit.object.matrixWorld).normalize()
+          normal = [worldNormal.x, worldNormal.y, worldNormal.z]
+        }
+        return { expressId, faceId: null, point, normal }
       }
       return null
     }
@@ -254,7 +315,7 @@ export const ViewerCanvas = memo(function ViewerCanvas({
       const cy = event.clientY
       hoverRaf = requestAnimationFrame(() => {
         hoverRaf = 0
-        const id = pickAt(cx, cy)
+        const id = pickAt(cx, cy)?.expressId ?? null
         canvas.classList.toggle('hovering', id != null)
         if (id === hoveredRef.current) return
         if (hoveredRef.current != null && !selectedIdsRef.current.has(hoveredRef.current)) {
@@ -283,7 +344,14 @@ export const ViewerCanvas = memo(function ViewerCanvas({
 
     const onClick = (event: MouseEvent) => {
       if (didDrag) return
-      onSelectRef.current(pickAt(event.clientX, event.clientY), isAdditiveModifier(event))
+      const hit = pickAt(event.clientX, event.clientY)
+      onSelectRef.current(hit?.expressId ?? null, isAdditiveModifier(event))
+      onSelectFaceRef.current?.(hit?.faceId ?? null)
+      if (hit && hit.point && hit.normal) {
+        onFaceCandidateRef.current?.({ expressId: hit.expressId, point: hit.point, normal: hit.normal })
+      } else {
+        onFaceCandidateRef.current?.(null)
+      }
     }
 
     const onContextMenu = (event: Event) => {
@@ -314,6 +382,7 @@ export const ViewerCanvas = memo(function ViewerCanvas({
       meshIndexRef.current = 0
       meshById.current.clear()
       overlayGroupRef.current = null
+      basketGroupRef.current = null
     }
   }, [])
 
@@ -388,7 +457,7 @@ export const ViewerCanvas = memo(function ViewerCanvas({
       for (const mesh of meshesForId) {
         const material = mesh.material as THREE.MeshLambertMaterial
         const id = mesh.userData.expressId as number
-        const overlayOn = overlayFaces != null && overlayFaces.length > 0 && selectedIds.has(id)
+        const overlayOn = overlayIds != null && overlayIds.has(id)
         const hidden = hiddenIds.has(id) || (viewIsolateIds != null && !viewIsolateIds.has(id))
         const ghost = !hidden && (ghostIds.has(id) || overlayOn)
         const dim = !hidden && !ghost && isolatedIds != null && !isolatedIds.has(id)
@@ -407,7 +476,7 @@ export const ViewerCanvas = memo(function ViewerCanvas({
       }
     }
     requestRenderRef.current()
-  }, [isolatedIds, hiddenIds, ghostIds, viewIsolateIds, meshes.length, overlayFaces, selectedIds, colorOverrides])
+  }, [isolatedIds, hiddenIds, ghostIds, viewIsolateIds, meshes.length, overlayIds, selectedIds, colorOverrides])
 
   useEffect(() => {
     const previous = selectedIdsRef.current
@@ -418,31 +487,69 @@ export const ViewerCanvas = memo(function ViewerCanvas({
         material.emissive.setHex(0x000000)
       }
     }
-    if (!(overlayFaces && overlayFaces.length > 0)) {
-      for (const id of selectedIds) {
-        for (const mesh of meshById.current.get(id) ?? []) {
-          const material = mesh.material as THREE.MeshLambertMaterial
-          material.emissive.setHex(0x007acc)
-          material.emissiveIntensity = 0.45
-        }
+    for (const id of selectedIds) {
+      if (overlayIds?.has(id)) continue
+      for (const mesh of meshById.current.get(id) ?? []) {
+        const material = mesh.material as THREE.MeshLambertMaterial
+        material.emissive.setHex(0x007acc)
+        material.emissiveIntensity = 0.45
       }
     }
     selectedIdsRef.current = selectedIds
     requestRenderRef.current()
-  }, [selectedIds, overlayFaces])
+  }, [selectedIds, overlayIds])
 
   useEffect(() => {
     const group = overlayGroupRef.current
     if (!group) return
     clearObject3d(group)
+    faceOutlineRef.current = null
     if (overlayFaces && overlayFaces.length > 0) {
       for (const face of overlayFaces) addQuantityFaceOverlay(group, face, faceLayers)
     }
     requestRenderRef.current()
     return () => {
       clearObject3d(group)
+      faceOutlineRef.current = null
     }
   }, [overlayFaces, selectedIds, faceLayers])
+
+  useEffect(() => {
+    const group = overlayGroupRef.current
+    if (!group) return
+    if (faceOutlineRef.current) {
+      group.remove(faceOutlineRef.current)
+      faceOutlineRef.current.geometry.dispose()
+      const material = faceOutlineRef.current.material
+      if (Array.isArray(material)) material.forEach((item) => item.dispose())
+      else material.dispose()
+      faceOutlineRef.current = null
+    }
+    if (selectedFaceId) {
+      const target = group.children.find(
+        (child): child is THREE.Mesh => child instanceof THREE.Mesh && child.userData.faceId === selectedFaceId,
+      )
+      if (target) {
+        const outline = buildFaceOutline(target)
+        group.add(outline)
+        faceOutlineRef.current = outline
+      }
+    }
+    requestRenderRef.current()
+  }, [selectedFaceId, overlayFaces, faceLayers])
+
+  useEffect(() => {
+    const group = basketGroupRef.current
+    if (!group) return
+    clearObject3d(group)
+    if (basketFaces) {
+      for (const face of basketFaces) addBasketFaceOverlay(group, face)
+    }
+    requestRenderRef.current()
+    return () => {
+      clearObject3d(group)
+    }
+  }, [basketFaces])
 
   useEffect(() => {
     const group = modelGroupRef.current
@@ -459,6 +566,17 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     requestRenderRef.current()
   }, [fitToken, meshes.length])
 
+  const basketTotals = useMemo(() => {
+    if (!basketFaces || basketFaces.length === 0) return null
+    let gross = 0
+    let net = 0
+    for (const face of basketFaces) {
+      gross += face.grossArea
+      net += face.netArea
+    }
+    return { gross, net, count: basketFaces.length }
+  }, [basketFaces])
+
   return (
     <div className="relative h-full w-full">
       <canvas ref={canvasRef} className="ifc-orbit block h-full w-full" />
@@ -468,6 +586,30 @@ export const ViewerCanvas = memo(function ViewerCanvas({
           layers={faceLayers}
           onToggle={(layer) => setFaceLayers((current) => toggleFaceLayer(current, layer))}
         />
+      ) : null}
+      {basketTotals ? (
+        <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-md border border-border bg-card/95 px-3 py-2 text-[12px] shadow-lg backdrop-blur">
+          <span className="font-medium">
+            {basketTotals.count} face{basketTotals.count === 1 ? '' : 's'} selected
+          </span>
+          <span className="text-muted-foreground">
+            gross {basketTotals.gross.toFixed(3)} m² · net {basketTotals.net.toFixed(3)} m²
+          </span>
+          <button
+            type="button"
+            className="rounded bg-primary px-2 py-1 text-[11px] font-semibold text-white hover:bg-primary/90"
+            onClick={onRegisterBasket}
+          >
+            Register as property
+          </button>
+          <button
+            type="button"
+            className="rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent"
+            onClick={onClearBasket}
+          >
+            Clear
+          </button>
+        </div>
       ) : null}
     </div>
   )

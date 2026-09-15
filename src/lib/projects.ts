@@ -18,7 +18,8 @@ export type ProjectSnapshot = ProjectRecord & {
   modelPath: string | null
   geometryDir: string
   sessionJson: string | null
-  warehouse: number[] | null
+  hasWarehouse: boolean
+  hasQuantities: boolean
   hasGeometryCache: boolean
   project?: ProjectRecord
 }
@@ -70,8 +71,13 @@ export async function importIfcPath(path: string, fileName?: string): Promise<Pr
 }
 
 export async function importIfcBytes(fileName: string, bytes: Uint8Array): Promise<ProjectSnapshot> {
+  // Sent as a raw IPC body (not wrapped in a JSON object) so Tauri transfers it as
+  // an octet-stream instead of a JSON array of numbers; the file name travels as a
+  // header since the body is fully occupied by the file bytes.
   return flattenSnapshot(
-    await invoke<ProjectSnapshot>('import_ifc_bytes', { fileName, bytes: Array.from(bytes) }),
+    await invoke<ProjectSnapshot>('import_ifc_bytes', bytes, {
+      headers: { 'x-file-name': encodeURIComponent(fileName) },
+    }),
   )
 }
 
@@ -80,14 +86,38 @@ export async function saveProjectSession(session: ProjectSession): Promise<void>
 }
 
 export async function saveProjectWarehouse(bytes: Uint8Array): Promise<void> {
-  await invoke('save_project_warehouse', { bytes: Array.from(bytes) })
+  await invoke('save_project_warehouse', bytes)
+}
+
+/** Companion to saveProjectWarehouse; null if the project has no saved warehouse. */
+export async function getProjectWarehouse(): Promise<Uint8Array | null> {
+  try {
+    const buffer = await invoke<ArrayBuffer>('get_project_warehouse')
+    return new Uint8Array(buffer)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Full (per-face geometry included) quantity takeoff, persisted separately from
+ * session.json so reopening a project doesn't need to recompute it - see
+ * persistableQuantities() for why the copy embedded in the session is totals-only.
+ */
+export async function saveProjectQuantities(json: string): Promise<void> {
+  await invoke('save_project_quantities', new TextEncoder().encode(json))
+}
+
+/** Companion to saveProjectQuantities; null if the project has no saved takeoff. */
+export async function getProjectQuantities(): Promise<string | null> {
+  try {
+    const buffer = await invoke<ArrayBuffer>('get_project_quantities')
+    return new TextDecoder().decode(buffer)
+  } catch {
+    return null
+  }
 }
 
 export function sessionFromSnapshot(snapshot: ProjectSnapshot): ProjectSession | null {
   return parseSessionJson(snapshot.sessionJson)
-}
-
-export function warehouseBytesFromSnapshot(snapshot: ProjectSnapshot): Uint8Array | null {
-  if (!snapshot.warehouse || snapshot.warehouse.length === 0) return null
-  return Uint8Array.from(snapshot.warehouse)
 }

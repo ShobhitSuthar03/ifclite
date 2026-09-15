@@ -115,6 +115,47 @@ export function addQuantityFaceOverlay(
   })
   const mesh = new THREE.Mesh(geometry, material)
   mesh.userData.expressId = face.expressId
+  mesh.userData.faceId = face.faceId
   mesh.renderOrder = 8
   group.add(mesh)
+}
+
+/** Distinct from FACE_KIND_COLOR and CONTACT_FACE_COLOR so a manually gathered
+ * "takeoff basket" face reads as a selection, not a classification. */
+export const BASKET_FACE_COLOR = 0xffd60a
+
+/** Manual-basket face highlight - always visible (native or calculated view),
+ * unlike addQuantityFaceOverlay which depends on a computed QuantityResult. */
+export function addBasketFaceOverlay(group: THREE.Group, face: FaceQuantity) {
+  if (face.positions.length < 9) return
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(offsetAndWound(face.positions, face.normal), 3))
+  geometry.computeVertexNormals()
+  const material = new THREE.MeshBasicMaterial({
+    color: BASKET_FACE_COLOR,
+    side: THREE.DoubleSide,
+    depthTest: true,
+    depthWrite: true,
+    transparent: true,
+    opacity: 0.55,
+    toneMapped: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -3,
+    polygonOffsetUnits: -3,
+  })
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.userData.expressId = face.expressId
+  mesh.userData.faceId = face.faceId
+  mesh.renderOrder = 9
+  group.add(mesh)
+}
+
+/** Thin edge outline drawn on top of the overlay mesh for the actively picked face. */
+export function buildFaceOutline(mesh: THREE.Mesh): THREE.LineSegments {
+  const outline = new THREE.LineSegments(
+    new THREE.EdgesGeometry(mesh.geometry),
+    new THREE.LineBasicMaterial({ color: 0xffffff, toneMapped: false, depthTest: false }),
+  )
+  outline.renderOrder = 9
+  return outline
 }

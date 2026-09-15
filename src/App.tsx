@@ -31,7 +31,13 @@ import {
   type LoadSource,
 } from '@/lib/ifc-loader'
 import { buildBreakdown, type BreakdownMode } from '@/lib/breakdown'
-import { computeElementQuantities, meshesForQuantityJob, type QuantityResult } from '@/lib/geometry-qto'
+import {
+  computeElementQuantities,
+  meshesForQuantityJob,
+  type ElementQuantity,
+  type FaceQuantity,
+  type QuantityResult,
+} from '@/lib/geometry-qto'
 import {
   EMPTY_QUERY,
   createIfcQuery,
@@ -50,7 +56,7 @@ import {
 } from '@/lib/view-visibility'
 import { intersectIds } from '@/lib/spatial-scope'
 import { createLensProvider } from '@/lib/lens-provider'
-import { createMutationView, overlayEntityData } from '@/lib/mutation-view'
+import { createMutationView, createWarehouseMutationView, overlayEntityData } from '@/lib/mutation-view'
 import { recycleCsvProcessor } from '@/lib/csv-export'
 import { evaluateLens, type Lens, type LensEvaluationResult } from '@ifc-lite/lens'
 import {
@@ -84,6 +90,8 @@ import {
 import {
   closeProject,
   createProject,
+  getProjectQuantities,
+  getProjectWarehouse,
   getProjectsRoot,
   importIfcBytes,
   importIfcPath,
@@ -91,9 +99,9 @@ import {
   openProject,
   projectsAvailable,
   saveProjectSession,
+  saveProjectQuantities,
   saveProjectWarehouse,
   sessionFromSnapshot,
-  warehouseBytesFromSnapshot,
   type ProjectRecord,
   type ProjectSnapshot,
 } from '@/lib/projects'
@@ -104,6 +112,37 @@ import {
 } from '@/lib/project-session'
 
 type MobileTab = LeftTab | RightTab
+
+/**
+ * Which of an element's faces a raw 3D click landed on, using the face's own plane
+ * (normal direction + offset) rather than a full point-in-polygon test - faces of one
+ * element are ordinary planar sides, so "closest matching plane, same direction" is
+ * enough to disambiguate them reliably.
+ */
+function matchFaceAtPoint(
+  faces: FaceQuantity[],
+  point: [number, number, number],
+  hitNormal: [number, number, number],
+): FaceQuantity | null {
+  let best: FaceQuantity | null = null
+  let bestDist = Infinity
+  for (const face of faces) {
+    if (face.positions.length < 3) continue
+    const alignment =
+      face.normal[0] * hitNormal[0] + face.normal[1] * hitNormal[1] + face.normal[2] * hitNormal[2]
+    if (alignment < 0.9) continue
+    const planeOffset =
+      face.positions[0] * face.normal[0] + face.positions[1] * face.normal[1] + face.positions[2] * face.normal[2]
+    const dist = Math.abs(
+      point[0] * face.normal[0] + point[1] * face.normal[1] + point[2] * face.normal[2] - planeOffset,
+    )
+    if (dist < bestDist) {
+      bestDist = dist
+      best = face
+    }
+  }
+  return bestDist < 0.05 ? best : null
+}
 
 function readEntity(
   store: IfcDataStore | null,
@@ -167,6 +206,11 @@ export default function App() {
   const [engineStatus, setEngineStatus] = useState<GeometryEngineStatus>(getGeometryEngineStatus)
   const [quantities, setQuantities] = useState<QuantityResult | null>(null)
   const [quantityBusy, setQuantityBusy] = useState(false)
+  const [calculatedView, setCalculatedView] = useState(false)
+  const [selectedFaceId, setSelectedFaceId] = useState<string | null>(null)
+  const [faceSelectMode, setFaceSelectMode] = useState(false)
+  const [faceBasketExpressId, setFaceBasketExpressId] = useState<number | null>(null)
+  const [faceBasket, setFaceBasket] = useState<Map<string, FaceQuantity>>(() => new Map())
   const [displayMode, setDisplayMode] = useState<DisplayMode>('all')
   const [focusIds, setFocusIds] = useState<Set<number>>(() => new Set())
   const [hiddenIds, setHiddenIds] = useState<Set<number>>(() => new Set())
@@ -190,6 +234,9 @@ export default function App() {
   const loadGen = useRef(0)
   const pendingSession = useRef<ProjectSession | null>(null)
   const pendingWarehouse = useRef<Uint8Array | null>(null)
+  const pendingQuantityIds = useRef<Set<number> | null>(null)
+  const pendingFullQuantities = useRef<QuantityResult | null>(null)
+  const elementFaceCache = useRef<Map<number, ElementQuantity>>(new Map())
   const warehouseRestored = useRef(false)
   const pendingMeshes = useRef<MeshData[]>([])
   const meshRaf = useRef(0)
@@ -221,13 +268,27 @@ export default function App() {
     setReportFilter(session.reportFilter)
     setFollowViewer(session.followViewer)
     setQuantities(session.quantities)
+    if (session.quantities && session.quantities.elements.length > 0) {
+      pendingQuantityIds.current = new Set(session.quantities.elements.map((item) => item.expressId))
+    }
     setMutationPatches(session.mutations)
   }, [])
 
-  const rememberSnapshot = useCallback((snapshot: ProjectSnapshot, restoreSession = true) => {
+  const rememberSnapshot = useCallback(async (snapshot: ProjectSnapshot, restoreSession = true) => {
     setProject(snapshot)
     pendingSession.current = restoreSession ? sessionFromSnapshot(snapshot) : null
-    pendingWarehouse.current = restoreSession ? warehouseBytesFromSnapshot(snapshot) : null
+    pendingWarehouse.current = restoreSession && snapshot.hasWarehouse ? await getProjectWarehouse() : null
+    pendingFullQuantities.current = null
+    if (restoreSession && snapshot.hasQuantities) {
+      const json = await getProjectQuantities()
+      if (json) {
+        try {
+          pendingFullQuantities.current = JSON.parse(json) as QuantityResult
+        } catch (caught) {
+          console.warn('Saved quantities.json was unreadable; will recompute from totals', caught)
+        }
+      }
+    }
     void listProjects()
       .then(setProjects)
       .catch(() => undefined)
@@ -327,6 +388,12 @@ export default function App() {
     setExportMessage(null)
     setQuantities(null)
     setQuantityBusy(false)
+    setCalculatedView(false)
+    setSelectedFaceId(null)
+    setFaceSelectMode(false)
+    setFaceBasketExpressId(null)
+    setFaceBasket(new Map())
+    elementFaceCache.current.clear()
     setDisplayMode('all')
     setFocusIds(new Set())
     setHiddenIds(new Set())
@@ -439,6 +506,8 @@ export default function App() {
     loadGen.current += 1
     pendingSession.current = null
     pendingWarehouse.current = null
+    pendingQuantityIds.current = null
+    pendingFullQuantities.current = null
     warehouseRestored.current = false
     pendingMeshes.current = []
     if (meshRaf.current) {
@@ -461,6 +530,12 @@ export default function App() {
     setExportMessage(null)
     setQuantities(null)
     setQuantityBusy(false)
+    setCalculatedView(false)
+    setSelectedFaceId(null)
+    setFaceSelectMode(false)
+    setFaceBasketExpressId(null)
+    setFaceBasket(new Map())
+    elementFaceCache.current.clear()
     setDisplayMode('all')
     setFocusIds(new Set())
     setHiddenIds(new Set())
@@ -487,7 +562,7 @@ export default function App() {
       try {
         const snapshot = await createProject(name)
         clearViewer()
-        rememberSnapshot(snapshot, false)
+        await rememberSnapshot(snapshot, false)
         setHomeOpen(true)
         await refreshProjects()
       } catch (caught) {
@@ -562,7 +637,7 @@ export default function App() {
     async (id: string) => {
       try {
         const snapshot = await openProject(id)
-        rememberSnapshot(snapshot)
+        await rememberSnapshot(snapshot)
         await refreshProjects()
         if (snapshot.modelPath) {
           await load({
@@ -570,7 +645,7 @@ export default function App() {
             name: snapshot.fileName ?? 'model.ifc',
             path: snapshot.modelPath,
             cacheKey: snapshot.cacheKey ?? undefined,
-            skipParse: Boolean(snapshot.warehouse && snapshot.warehouse.length > 0),
+            skipParse: snapshot.hasWarehouse,
           })
           setHomeOpen(false)
         } else {
@@ -597,10 +672,12 @@ export default function App() {
       }
       pendingSession.current = null
       pendingWarehouse.current = null
+      pendingQuantityIds.current = null
+      pendingFullQuantities.current = null
       warehouseRestored.current = false
       if (source.kind === 'path') {
         const snapshot = await importIfcPath(source.path, source.name)
-        rememberSnapshot(snapshot, false)
+        await rememberSnapshot(snapshot, false)
         if (!snapshot.modelPath) throw new Error('IFC was copied but the project path is missing.')
         await load({
           kind: 'path',
@@ -612,7 +689,7 @@ export default function App() {
         return
       }
       const snapshot = await importIfcBytes(source.name, source.bytes)
-      rememberSnapshot(snapshot, false)
+      await rememberSnapshot(snapshot, false)
       if (!snapshot.modelPath) throw new Error('IFC was saved but the project path is missing.')
       await load({
         kind: 'path',
@@ -798,7 +875,14 @@ export default function App() {
     () => (selectedIds.size === 0 ? [] : meshes.filter((mesh) => selectedIds.has(mesh.expressId))),
     [meshes, selectedIds],
   )
-  const mutationView = useMemo(() => (store ? createMutationView(store) : null), [store])
+  // A project reopened from warehouse.sqlite has no live parse (store === null) - fall
+  // back to a warehouse-backed view so property/attribute edits still have somewhere to
+  // read their base values from, instead of silently doing nothing.
+  const mutationView = useMemo(() => {
+    if (store) return createMutationView(store)
+    if (warehouse) return createWarehouseMutationView(warehouse)
+    return null
+  }, [store, warehouse])
   const warehouseLookup = useMemo(
     () => (warehouse && !store ? elementLookupFromWarehouse(warehouse) : null),
     [warehouse, store],
@@ -970,13 +1054,22 @@ export default function App() {
     [selectedMeshes],
   )
 
+  // Calculated view shows every element that has been calculated so far, not just
+  // whatever is currently selected - otherwise changing the selection (or nothing
+  // being selected at all) makes retained quantities look like they vanished.
   const overlayFaces = useMemo(() => {
-    if (!quantities || selectedIds.size === 0) return null
-    const faces = quantities.elements
-      .filter((item) => selectedIds.has(item.expressId))
-      .flatMap((item) => item.faces)
+    if (!calculatedView || !quantities) return null
+    const faces = quantities.elements.flatMap((item) => item.faces)
     return faces.length > 0 ? faces : null
-  }, [quantities, selectedIds])
+  }, [calculatedView, quantities])
+
+  useEffect(() => {
+    if (!overlayFaces) setSelectedFaceId(null)
+  }, [overlayFaces])
+
+  const onSelectFace = useCallback((faceId: string | null) => {
+    setSelectedFaceId((current) => (current === faceId ? null : faceId))
+  }, [])
 
   const selectedQuantityRows = useMemo(() => {
     if (!quantities || selectedIds.size === 0) return []
@@ -1007,32 +1100,167 @@ export default function App() {
     return acc
   }, [selectedQuantityRows])
 
+  const calculateQuantitiesFor = useCallback(
+    (targetIds: Set<number>) => {
+      if (targetIds.size === 0) return
+      setQuantityBusy(true)
+      window.setTimeout(() => {
+        try {
+          const subset = meshesForQuantityJob(meshes, targetIds)
+          // Desktop's packed geometry cache doesn't carry ifcType on the mesh itself
+          // (see faces.ts's 'IfcProduct' sentinel); backfill it from whichever source
+          // of parsed IFC data is available so quantity takeoff isn't filtered away.
+          const typed = subset.map((mesh) => {
+            if (mesh.ifcType) return mesh
+            const ifcType = store?.entities.getTypeName(mesh.expressId) ?? warehouseLookup?.get(mesh.expressId)?.ifcType
+            return ifcType ? { ...mesh, ifcType } : mesh
+          })
+          const next = computeElementQuantities(typed, {
+            targetIds,
+            keepPositionsFor: targetIds,
+          })
+          setQuantities(next)
+          if (projectsAvailable() && project) {
+            void saveProjectQuantities(JSON.stringify(next)).catch((caught) => {
+              console.warn('Could not save quantities.json', caught)
+            })
+          }
+        } catch (caught) {
+          setQuantities(null)
+          setError(caught instanceof Error ? caught.message : String(caught))
+        } finally {
+          setQuantityBusy(false)
+        }
+      }, 0)
+    },
+    [meshes, store, warehouseLookup, project],
+  )
+
   const onCalculateQuantities = useCallback(() => {
     if (selectedIds.size === 0) {
       setError('Select one or more elements, then click Calculate quantities.')
       return
     }
-    const targetIds = new Set(selectedIds)
     setError(null)
-    setQuantityBusy(true)
     setRightTab('quantities')
     setMobileTab('quantities')
-    window.setTimeout(() => {
-      try {
-        const subset = meshesForQuantityJob(meshes, targetIds)
-        const next = computeElementQuantities(subset, {
-          targetIds,
-          keepPositionsFor: targetIds,
-        })
-        setQuantities(next)
-      } catch (caught) {
-        setQuantities(null)
-        setError(caught instanceof Error ? caught.message : String(caught))
-      } finally {
-        setQuantityBusy(false)
+    calculateQuantitiesFor(new Set(selectedIds))
+  }, [selectedIds, calculateQuantitiesFor])
+
+  // Face-select mode: on-demand, per-element face geometry so an estimator can pick
+  // individual faces in Native OR Calculated view without first running a full
+  // "Calculate quantities" pass. Cheap (one element + its AABB neighbors for contact
+  // detection), and cached since re-clicking the same element is common.
+  const getElementFaces = useCallback(
+    (expressId: number): ElementQuantity | null => {
+      const cached = elementFaceCache.current.get(expressId)
+      if (cached) return cached
+      const targetIds = new Set([expressId])
+      const subset = meshesForQuantityJob(meshes, targetIds)
+      if (subset.length === 0) return null
+      const typed = subset.map((mesh) => {
+        if (mesh.ifcType) return mesh
+        const ifcType = store?.entities.getTypeName(mesh.expressId) ?? warehouseLookup?.get(mesh.expressId)?.ifcType
+        return ifcType ? { ...mesh, ifcType } : mesh
+      })
+      const result = computeElementQuantities(typed, { targetIds, keepPositionsFor: targetIds })
+      const element = result.elements.find((item) => item.expressId === expressId) ?? null
+      if (element) elementFaceCache.current.set(expressId, element)
+      return element
+    },
+    [meshes, store, warehouseLookup],
+  )
+
+  const onFaceCandidate = useCallback(
+    (info: { expressId: number; point: [number, number, number]; normal: [number, number, number] } | null) => {
+      if (!faceSelectMode || !info) return
+      const element = getElementFaces(info.expressId)
+      if (!element) return
+      const face = matchFaceAtPoint(element.faces, info.point, info.normal)
+      if (!face) return
+      if (faceBasketExpressId !== null && faceBasketExpressId !== info.expressId) {
+        setFaceBasketExpressId(info.expressId)
+        setFaceBasket(new Map([[face.faceId, face]]))
+        return
       }
-    }, 0)
-  }, [meshes, selectedIds])
+      setFaceBasketExpressId(info.expressId)
+      setFaceBasket((prev) => {
+        const next = new Map(prev)
+        if (next.has(face.faceId)) next.delete(face.faceId)
+        else next.set(face.faceId, face)
+        return next
+      })
+    },
+    [faceSelectMode, faceBasketExpressId, getElementFaces],
+  )
+
+  const faceBasketList = useMemo(() => [...faceBasket.values()], [faceBasket])
+
+  const onClearFaceBasket = useCallback(() => {
+    setFaceBasket(new Map())
+    setFaceBasketExpressId(null)
+  }, [])
+
+  const onRegisterFaceBasket = useCallback(() => {
+    if (!mutationView || faceBasketExpressId == null || faceBasketList.length === 0) return
+    let gross = 0
+    let net = 0
+    for (const face of faceBasketList) {
+      gross += face.grossArea
+      net += face.netArea
+    }
+    const grossValue = gross.toFixed(3)
+    const netValue = net.toFixed(3)
+    const pset = 'Qto_Manual'
+    mutationView.setProperty(faceBasketExpressId, pset, 'ManualFormworkGrossArea', grossValue)
+    mutationView.setProperty(faceBasketExpressId, pset, 'ManualFormworkNetArea', netValue)
+    setMutationPatches((prev) => {
+      const rest = prev.filter(
+        (patch) =>
+          !(
+            patch.expressId === faceBasketExpressId &&
+            patch.kind === 'property' &&
+            patch.pset === pset &&
+            (patch.name === 'ManualFormworkGrossArea' || patch.name === 'ManualFormworkNetArea')
+          ),
+      )
+      return [
+        ...rest,
+        { expressId: faceBasketExpressId, kind: 'property', pset, name: 'ManualFormworkGrossArea', value: grossValue },
+        { expressId: faceBasketExpressId, kind: 'property', pset, name: 'ManualFormworkNetArea', value: netValue },
+      ]
+    })
+    setMutationTick((tick) => tick + 1)
+    onClearFaceBasket()
+  }, [mutationView, faceBasketExpressId, faceBasketList, onClearFaceBasket])
+
+  // Prefer the full takeoff saved in quantities.json (instant, no recompute); only
+  // recompute from the session's totals-only copy when that file is missing, e.g. a
+  // project saved before this feature existed, or the file failed to read/parse.
+  useEffect(() => {
+    if (busy || meshes.length === 0) return
+    if (pendingFullQuantities.current) {
+      setQuantities(pendingFullQuantities.current)
+      pendingFullQuantities.current = null
+      pendingQuantityIds.current = null
+      return
+    }
+    if (!pendingQuantityIds.current) return
+    const targetIds = pendingQuantityIds.current
+    pendingQuantityIds.current = null
+    calculateQuantitiesFor(targetIds)
+  }, [busy, meshes, calculateQuantitiesFor])
+
+  const onToggleCalculatedView = useCallback(() => {
+    setCalculatedView((value) => {
+      const next = !value
+      // Turning the toggle on with a selection but nothing calculated yet used to just
+      // show an empty view - run the calculation as part of turning it on instead of
+      // requiring a separate "Calculate quantities" click first.
+      if (next && !quantities && selectedIds.size > 0) onCalculateQuantities()
+      return next
+    })
+  }, [quantities, selectedIds, onCalculateQuantities])
 
   const quantitySummary = useMemo(() => {
     if (!quantities || selectedIds.size === 0) return null
@@ -1213,6 +1441,8 @@ export default function App() {
     selectedIds,
     formwork: quantities,
     quantityBusy,
+    selectedFaceId,
+    onSelectFace,
     onExported: (message: string) => {
       setExportMessage(message)
       setError(null)
@@ -1288,11 +1518,16 @@ export default function App() {
         displayMode={displayMode}
         hiddenCount={combinedHiddenIds.size}
         canShowAll={displayMode !== 'all' || hiddenIds.size > 0 || treeScopeIds != null}
+        calculatedView={calculatedView}
+        canShowCalculatedView={quantities != null}
+        faceSelectMode={faceSelectMode}
         onFit={() => setFitToken((token) => token + 1)}
         onHide={onHideSelected}
         onGhost={onGhostSelected}
         onIsolate={onIsolateSelected}
         onShowAll={onShowAll}
+        onToggleCalculatedView={onToggleCalculatedView}
+        onToggleFaceSelectMode={() => setFaceSelectMode((value) => !value)}
       />
       <div ref={rowRef} className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <div
@@ -1334,6 +1569,12 @@ export default function App() {
               theme={theme}
               overlayFaces={overlayFaces}
               colorOverrides={lensResult?.colorMap ?? null}
+              selectedFaceId={selectedFaceId}
+              onSelectFace={onSelectFace}
+              basketFaces={faceBasketList.length > 0 ? faceBasketList : null}
+              onFaceCandidate={onFaceCandidate}
+              onRegisterBasket={onRegisterFaceBasket}
+              onClearBasket={onClearFaceBasket}
             />
           )}
         </div>

@@ -1,4 +1,4 @@
-import { Eye, EyeOff, Focus, Ghost, Home } from 'lucide-react'
+import { Eye, EyeOff, Focus, Ghost, Home, MousePointerClick, Palette } from 'lucide-react'
 import type { DisplayMode } from '@/lib/view-visibility'
 import { cn, formatCount } from '@/lib/utils'
 
@@ -9,11 +9,16 @@ type ToolStripProps = {
   displayMode: DisplayMode
   hiddenCount: number
   canShowAll: boolean
+  calculatedView: boolean
+  canShowCalculatedView: boolean
+  faceSelectMode: boolean
   onFit: () => void
   onHide: () => void
   onGhost: () => void
   onIsolate: () => void
   onShowAll: () => void
+  onToggleCalculatedView: () => void
+  onToggleFaceSelectMode: () => void
 }
 
 const btn =
@@ -26,11 +31,16 @@ export function ToolStrip({
   displayMode,
   hiddenCount,
   canShowAll,
+  calculatedView,
+  canShowCalculatedView,
+  faceSelectMode,
   onFit,
   onHide,
   onGhost,
   onIsolate,
   onShowAll,
+  onToggleCalculatedView,
+  onToggleFaceSelectMode,
 }: ToolStripProps) {
   return (
     <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border bg-card px-3">
@@ -72,6 +82,30 @@ export function ToolStrip({
         <Eye className="h-3.5 w-3.5" />
         <span className="hidden sm:inline">Show all</span>
       </button>
+      <span className="mx-1 h-5 w-px bg-border" />
+      <button
+        type="button"
+        title={
+          canShowCalculatedView
+            ? 'Toggle between native materials and calculated quantity colors'
+            : 'Calculate quantities for a selection first'
+        }
+        disabled={!canShowCalculatedView}
+        className={cn(btn, calculatedView && 'bg-primary/20 text-primary')}
+        onClick={onToggleCalculatedView}
+      >
+        <Palette className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">{calculatedView ? 'Calculated view' : 'Native view'}</span>
+      </button>
+      <button
+        type="button"
+        title="Click faces to gather them into a manual takeoff (works in native or calculated view)"
+        className={cn(btn, faceSelectMode && 'bg-primary/20 text-primary')}
+        onClick={onToggleFaceSelectMode}
+      >
+        <MousePointerClick className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">Select faces</span>
+      </button>
       <span className="mx-2 hidden h-5 w-px bg-border sm:block" />
       <p className="hidden text-[11px] text-muted-foreground lg:block">
         Left-drag orbit · Right-drag pan · Scroll zoom · Click select · Ctrl+click add
@@ -87,6 +121,12 @@ export function ToolStrip({
         )}
         {displayMode === 'isolate' && (
           <span className="rounded-[3px] bg-primary px-1.5 py-px text-[10px] font-semibold text-white">Isolated</span>
+        )}
+        {calculatedView && (
+          <span className="rounded-[3px] bg-primary px-1.5 py-px text-[10px] font-semibold text-white">Calculated view</span>
+        )}
+        {faceSelectMode && (
+          <span className="rounded-[3px] bg-primary px-1.5 py-px text-[10px] font-semibold text-white">Select faces</span>
         )}
         {matchCount != null && (
           <span className="rounded-[3px] bg-primary px-1.5 py-px text-[10px] font-semibold text-white">

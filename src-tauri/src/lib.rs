@@ -12,8 +12,9 @@ use commands::{
     get_native_geometry_cache_stream_status, hash_ifc_path, read_ifc_bytes,
 };
 use projects::{
-    close_project, create_project, current_project, get_projects_root, import_ifc_bytes,
-    import_ifc_path, last_project, list_projects, open_project, save_project_session,
+    close_project, create_project, current_project, export_ifc, get_project_quantities,
+    get_project_warehouse, get_projects_root, import_ifc_bytes, import_ifc_path, last_project,
+    list_projects, open_project, save_project_quantities, save_project_session,
     save_project_warehouse, ProjectBook,
 };
 use std::sync::Arc;
@@ -47,6 +48,10 @@ pub fn run() {
             import_ifc_bytes,
             save_project_session,
             save_project_warehouse,
+            get_project_warehouse,
+            save_project_quantities,
+            get_project_quantities,
+            export_ifc,
         ])
         .run(tauri::generate_context!())
         .expect("error while running IFClite desktop");

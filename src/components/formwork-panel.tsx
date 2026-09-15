@@ -9,6 +9,8 @@ type FormworkPanelProps = {
   busy: boolean
   selectedIds: Set<number>
   isolatedIds: Set<number> | null
+  selectedFaceId?: string | null
+  onSelectFace?: (faceId: string | null) => void
 }
 
 function formatVolume(value: number): string {
@@ -39,7 +41,14 @@ function kindClass(kind: FaceQuantity['kind']): string {
   return 'text-[#2aa198]'
 }
 
-export function FormworkPanel({ result, busy, selectedIds, isolatedIds }: FormworkPanelProps) {
+export function FormworkPanel({
+  result,
+  busy,
+  selectedIds,
+  isolatedIds,
+  selectedFaceId = null,
+  onSelectFace,
+}: FormworkPanelProps) {
   if (busy) {
     return (
       <p className="px-3 py-6 text-xs text-muted-foreground">Calculating quantities for the selection…</p>
@@ -109,8 +118,9 @@ export function FormworkPanel({ result, busy, selectedIds, isolatedIds }: Formwo
         <div className="min-w-0">
           <p className="text-[13px] font-semibold">Geometry quantities</p>
           <p className="text-[11px] text-muted-foreground">
-            Every IfcBuildingElement. Select objects to color laterals, tops, soffits, and contact in 3D.
-            Ctrl/Cmd/Shift+click adds to the selection.
+            Turn on <strong className="text-foreground">Calculated view</strong> in the toolbar above the 3D view to
+            color every calculated element by lateral/top/soffit/contact. Click a colored face in 3D, or a face row
+            below, to highlight that exact face in both places.
           </p>
         </div>
       </div>
@@ -166,7 +176,14 @@ export function FormworkPanel({ result, busy, selectedIds, isolatedIds }: Formwo
               {selectedIds.size === 1 ? '' : 's'}.
             </p>
           ) : (
-            selectedElements.map((element) => <SelectedElement key={element.expressId} element={element} />)
+            selectedElements.map((element) => (
+              <SelectedElement
+                key={element.expressId}
+                element={element}
+                selectedFaceId={selectedFaceId}
+                onSelectFace={onSelectFace}
+              />
+            ))
           )}
         </div>
       </ScrollArea>
@@ -174,7 +191,15 @@ export function FormworkPanel({ result, busy, selectedIds, isolatedIds }: Formwo
   )
 }
 
-function SelectedElement({ element }: { element: ElementQuantity }) {
+function SelectedElement({
+  element,
+  selectedFaceId,
+  onSelectFace,
+}: {
+  element: ElementQuantity
+  selectedFaceId: string | null
+  onSelectFace?: (faceId: string | null) => void
+}) {
   return (
     <section className="overflow-hidden rounded border border-border">
       <header className="bg-muted px-3 py-2 text-[12px] font-semibold">
@@ -207,7 +232,16 @@ function SelectedElement({ element }: { element: ElementQuantity }) {
           Faces ({formatCount(element.faces.length)})
         </p>
         {element.faces.map((face) => (
-          <div key={face.faceId} className="border-b border-dashed border-border px-3 py-2 last:border-b-0">
+          <button
+            key={face.faceId}
+            type="button"
+            disabled={!onSelectFace}
+            onClick={() => onSelectFace?.(face.faceId)}
+            title={onSelectFace ? 'Highlight this face in the 3D view (Calculated view)' : undefined}
+            className={`block w-full border-b border-dashed border-border px-3 py-2 text-left last:border-b-0 ${
+              onSelectFace ? 'cursor-pointer hover:bg-accent' : ''
+            } ${face.faceId === selectedFaceId ? 'bg-primary/10 ring-1 ring-inset ring-primary' : ''}`}
+          >
             <div className="flex items-baseline justify-between gap-2 text-[12px]">
               <span className="font-medium">
                 {faceLabel(face.normal)}{' '}
@@ -234,7 +268,7 @@ function SelectedElement({ element }: { element: ElementQuantity }) {
                 ? 'No contacting faces'
                 : `Contact #${face.overlappingIds.join(', #')}`}
             </p>
-          </div>
+          </button>
         ))}
       </div>
     </section>
