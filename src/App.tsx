@@ -22,7 +22,6 @@ import {
 import {
   getGeometryEngineStatus,
   loadIfcModel,
-  loadSampleModel,
   pickIfcFile,
   resolveSourceBytes,
   subscribeGeometryEngine,
@@ -70,6 +69,9 @@ import {
   reportToJson,
   reportToSpreadsheetXml,
   runReport,
+  spatialTreeFromWarehouse,
+  entityDataFromWarehouse,
+  elementLookupFromWarehouse,
   type BimDatabase,
   type FilterOptions,
   type GroupByField,
@@ -80,6 +82,7 @@ import {
   type ReportTemplate,
 } from '@/lib/bim-sql'
 import {
+  closeProject,
   createProject,
   getProjectsRoot,
   importIfcBytes,
@@ -104,10 +107,12 @@ type MobileTab = LeftTab | RightTab
 
 function readEntity(
   store: IfcDataStore | null,
+  warehouse: BimDatabase | null,
   expressId: number,
   ifcType: string,
 ): EntityData {
   if (!store) {
+    if (warehouse) return entityDataFromWarehouse(warehouse, expressId, ifcType)
     return {
       expressId,
       ifcType,
@@ -229,7 +234,9 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!store || !result || parsing) return
+    if (!result) return
+    const restoring = Boolean(pendingWarehouse.current) && !warehouseRestored.current
+    if (!restoring && (!store || parsing)) return
     let cancelled = false
     setWarehouseBusy(true)
     void (async () => {
@@ -241,18 +248,29 @@ export default function App() {
           pendingWarehouse.current = null
           try {
             db = await openBimDatabaseFromBytes(bytes)
+            if (!spatialRoot) {
+              const tree = spatialTreeFromWarehouse(db)
+              if (!cancelled && tree) setSpatialRoot(tree)
+            }
           } catch (caught) {
             console.warn('Saved warehouse.sqlite was unreadable; rebuilding', caught)
             warehouseRestored.current = false
+            if (!store) {
+              if (!cancelled) setWarehouseBusy(false)
+              return
+            }
             db = await openBimDatabase()
             ingestWarehouse(db, store, spatialRoot, result.fileName, result.cacheKey)
           }
         } else if (warehouseRestored.current) {
           if (!cancelled) setWarehouseBusy(false)
           return
-        } else {
+        } else if (store) {
           db = await openBimDatabase()
           ingestWarehouse(db, store, spatialRoot, result.fileName, result.cacheKey)
+        } else {
+          if (!cancelled) setWarehouseBusy(false)
+          return
         }
         if (cancelled) {
           closeBimDatabase(db)
@@ -263,7 +281,7 @@ export default function App() {
           return db
         })
         setReportTick((tick) => tick + 1)
-        if (projectsAvailable() && project) {
+        if (projectsAvailable() && project && store) {
           try {
             await saveProjectWarehouse(exportBimDatabase(db))
           } catch (caught) {
@@ -296,7 +314,8 @@ export default function App() {
     setHomeOpen(false)
     setBusy(true)
     setLoadingName(source.name)
-    setParsing(true)
+    const skipParse = source.kind === 'path' && Boolean(source.skipParse)
+    setParsing(!skipParse)
     setError(null)
     setSelectedId(null)
     setSelectedIds(new Set())
@@ -355,27 +374,29 @@ export default function App() {
       setProgress(next)
     }
 
-    const parserTask = resolveSourceBytes(source)
-      .then((buffer) => {
-        if (loadGen.current === gen) setSourceBytes(new Uint8Array(buffer))
-        return buildDataStore(buffer, (partial) => {
-          if (loadGen.current !== gen) return
-          setStore(partial)
-          setSpatialRoot(buildSpatialTreeFromStore(partial))
-        })
-      })
-      .then((nextStore) => {
-        if (loadGen.current !== gen) return
-        setStore(nextStore)
-        setSpatialRoot(buildSpatialTreeFromStore(nextStore))
-      })
-      .catch((caught) => {
-        if (loadGen.current !== gen) return
-        console.warn('IFC parser failed', caught)
-      })
-      .finally(() => {
-        if (loadGen.current === gen) setParsing(false)
-      })
+    const parserTask = skipParse
+      ? Promise.resolve()
+      : resolveSourceBytes(source)
+          .then((buffer) => {
+            if (loadGen.current === gen) setSourceBytes(new Uint8Array(buffer))
+            return buildDataStore(buffer, (partial) => {
+              if (loadGen.current !== gen) return
+              setStore(partial)
+              setSpatialRoot(buildSpatialTreeFromStore(partial))
+            })
+          })
+          .then((nextStore) => {
+            if (loadGen.current !== gen) return
+            setStore(nextStore)
+            setSpatialRoot(buildSpatialTreeFromStore(nextStore))
+          })
+          .catch((caught) => {
+            if (loadGen.current !== gen) return
+            console.warn('IFC parser failed', caught)
+          })
+          .finally(() => {
+            if (loadGen.current === gen) setParsing(false)
+          })
 
     try {
       const next = await loadIfcModel(
@@ -414,31 +435,128 @@ export default function App() {
     setProjects(await listProjects())
   }, [])
 
+  const clearViewer = useCallback(() => {
+    loadGen.current += 1
+    pendingSession.current = null
+    pendingWarehouse.current = null
+    warehouseRestored.current = false
+    pendingMeshes.current = []
+    if (meshRaf.current) {
+      cancelAnimationFrame(meshRaf.current)
+      meshRaf.current = 0
+    }
+    hoverBindRef.current?.(null)
+    setBusy(false)
+    setParsing(false)
+    setProgress(null)
+    setLoadingName(null)
+    setError(null)
+    setSelectedId(null)
+    setSelectedIds(new Set())
+    setMeshes([])
+    setResult(null)
+    setStore(null)
+    setSpatialRoot(null)
+    setSourceBytes(null)
+    setExportMessage(null)
+    setQuantities(null)
+    setQuantityBusy(false)
+    setDisplayMode('all')
+    setFocusIds(new Set())
+    setHiddenIds(new Set())
+    setTreeScopeIds(null)
+    setActiveLens(null)
+    setMutationTick(0)
+    setMutationPatches([])
+    setWarehouse((current) => {
+      closeBimDatabase(current)
+      return null
+    })
+    setReportFilter(EMPTY_REPORT_FILTER)
+    setFollowViewer(true)
+    setSpec(EMPTY_QUERY)
+    setGroupKey(null)
+    setBreakdownMode('type')
+    setLeftTab('tree')
+    setRightTab('properties')
+    void recycleCsvProcessor()
+  }, [])
+
   const onCreateProject = useCallback(
     async (name: string) => {
       try {
         const snapshot = await createProject(name)
+        clearViewer()
         rememberSnapshot(snapshot, false)
-        pendingSession.current = null
-        pendingWarehouse.current = null
-        loadGen.current += 1
-        setMeshes([])
-        setResult(null)
-        setStore(null)
-        setSpatialRoot(null)
-        setWarehouse((current) => {
-          closeBimDatabase(current)
-          return null
-        })
-        setQuantities(null)
         setHomeOpen(true)
         await refreshProjects()
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught))
       }
     },
-    [rememberSnapshot, refreshProjects],
+    [clearViewer, rememberSnapshot, refreshProjects],
   )
+
+  const onCloseProject = useCallback(async () => {
+    try {
+      if (projectsAvailable() && project && result) {
+        const session: ProjectSession = {
+          version: 1,
+          cacheKey: result.cacheKey,
+          fileName: result.fileName,
+          selectedIds: [...selectedIds],
+          hiddenIds: [...hiddenIds],
+          focusIds: [...focusIds],
+          treeScopeIds: treeScopeIds ? [...treeScopeIds] : null,
+          displayMode,
+          leftTab,
+          rightTab,
+          spec,
+          breakdownMode,
+          reportTemplate,
+          reportGroupBy,
+          reportMetrics,
+          reportFilter,
+          followViewer,
+          mutations: mutationPatches,
+          quantities: persistableQuantities(quantities),
+        }
+        await saveProjectSession(session)
+      }
+    } catch (caught) {
+      console.warn('Could not save session before closing', caught)
+    }
+    try {
+      if (projectsAvailable()) await closeProject()
+    } catch (caught) {
+      console.warn('Could not close project on the host', caught)
+    }
+    setProject(null)
+    clearViewer()
+    setHomeOpen(true)
+    await refreshProjects()
+  }, [
+    project,
+    result,
+    selectedIds,
+    hiddenIds,
+    focusIds,
+    treeScopeIds,
+    displayMode,
+    leftTab,
+    rightTab,
+    spec,
+    breakdownMode,
+    reportTemplate,
+    reportGroupBy,
+    reportMetrics,
+    reportFilter,
+    followViewer,
+    mutationPatches,
+    quantities,
+    clearViewer,
+    refreshProjects,
+  ])
 
   const onOpenProject = useCallback(
     async (id: string) => {
@@ -451,6 +569,8 @@ export default function App() {
             kind: 'path',
             name: snapshot.fileName ?? 'model.ifc',
             path: snapshot.modelPath,
+            cacheKey: snapshot.cacheKey ?? undefined,
+            skipParse: Boolean(snapshot.warehouse && snapshot.warehouse.length > 0),
           })
           setHomeOpen(false)
         } else {
@@ -482,14 +602,24 @@ export default function App() {
         const snapshot = await importIfcPath(source.path, source.name)
         rememberSnapshot(snapshot, false)
         if (!snapshot.modelPath) throw new Error('IFC was copied but the project path is missing.')
-        await load({ kind: 'path', name: source.name, path: snapshot.modelPath })
+        await load({
+          kind: 'path',
+          name: source.name,
+          path: snapshot.modelPath,
+          cacheKey: snapshot.cacheKey ?? undefined,
+        })
         setHomeOpen(false)
         return
       }
       const snapshot = await importIfcBytes(source.name, source.bytes)
       rememberSnapshot(snapshot, false)
       if (!snapshot.modelPath) throw new Error('IFC was saved but the project path is missing.')
-      await load({ kind: 'path', name: source.name, path: snapshot.modelPath })
+      await load({
+        kind: 'path',
+        name: source.name,
+        path: snapshot.modelPath,
+        cacheKey: snapshot.cacheKey ?? undefined,
+      })
       setHomeOpen(false)
     },
     [load, project, rememberSnapshot],
@@ -520,14 +650,6 @@ export default function App() {
     try {
       const source = await pickIfcFile()
       if (source) await importAndLoad(source)
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught))
-    }
-  }, [importAndLoad])
-
-  const onSample = useCallback(async () => {
-    try {
-      await importAndLoad(await loadSampleModel())
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
     }
@@ -677,6 +799,10 @@ export default function App() {
     [meshes, selectedIds],
   )
   const mutationView = useMemo(() => (store ? createMutationView(store) : null), [store])
+  const warehouseLookup = useMemo(
+    () => (warehouse && !store ? elementLookupFromWarehouse(warehouse) : null),
+    [warehouse, store],
+  )
 
   useEffect(() => {
     if (!mutationView || mutationPatches.length === 0) return
@@ -691,22 +817,27 @@ export default function App() {
     const type =
       selectedMeshes.find((mesh) => mesh.expressId === selectedId)?.ifcType ??
       store?.entities.getTypeName(selectedId) ??
+      warehouseLookup?.get(selectedId)?.ifcType ??
       'IfcProduct'
-    const base = readEntity(store, selectedId, type)
+    const base = readEntity(store, warehouse, selectedId, type)
     void mutationTick
     return mutationView ? overlayEntityData(base, mutationView) : base
-  }, [selectedId, selectedMeshes, store, mutationView, mutationTick])
+  }, [selectedId, selectedMeshes, store, warehouse, warehouseLookup, mutationView, mutationTick])
 
   const selectedEntities = useMemo(() => {
     void mutationTick
     if (selectedIds.size === 0) return []
     const typeById = new Map(selectedMeshes.map((mesh) => [mesh.expressId, mesh.ifcType]))
     return [...selectedIds].map((id) => {
-      const type = typeById.get(id) ?? store?.entities.getTypeName(id) ?? 'IfcProduct'
-      const base = readEntity(store, id, type)
+      const type =
+        typeById.get(id) ??
+        store?.entities.getTypeName(id) ??
+        warehouseLookup?.get(id)?.ifcType ??
+        'IfcProduct'
+      const base = readEntity(store, warehouse, id, type)
       return mutationView ? overlayEntityData(base, mutationView) : base
     })
-  }, [selectedIds, selectedMeshes, store, mutationView, mutationTick])
+  }, [selectedIds, selectedMeshes, store, warehouse, warehouseLookup, mutationView, mutationTick])
 
   const selectedLabel = useMemo(() => {
     if (selectedIds.size > 1) return `${selectedIds.size} selected`
@@ -716,11 +847,12 @@ export default function App() {
 
   useEffect(() => {
     hoverLookupRef.current = (id: number) => {
-      const type = store?.entities.getTypeName(id) ?? 'IfcProduct'
-      const name = store?.entities.getName(id)
+      const cached = warehouseLookup?.get(id)
+      const type = store?.entities.getTypeName(id) ?? cached?.ifcType ?? 'IfcProduct'
+      const name = store?.entities.getName(id) || cached?.name
       return name ? `${type} ${name}` : `${type} #${id}`
     }
-  }, [store])
+  }, [store, warehouseLookup])
 
   const onHover = useCallback((id: number | null) => {
     hoverBindRef.current?.(id)
@@ -1108,15 +1240,17 @@ export default function App() {
   const projectHome = (
     <EmptyState
       onOpen={onOpen}
-      onSample={onSample}
       dragActive={dragActive}
+      busy={busy}
       projectsEnabled={desktopHost}
       projectsRoot={projectsRoot}
       projects={projects}
       currentProject={project}
+      hasOpenModel={!empty}
       onCreateProject={(name) => void onCreateProject(name)}
       onOpenProject={(id) => void onOpenProject(id)}
-      onDismiss={homeOpen && !empty ? () => setHomeOpen(false) : undefined}
+      onCloseProject={() => void onCloseProject()}
+      onBackToViewer={homeOpen && !empty ? () => setHomeOpen(false) : undefined}
     />
   )
 
@@ -1126,9 +1260,11 @@ export default function App() {
         fileName={heading}
         busy={busy}
         onOpen={onOpen}
-        onSample={onSample}
         projectName={project?.name ?? null}
+        homeOpen={desktopHost && homeOpen}
         onProjects={desktopHost ? () => setHomeOpen(true) : undefined}
+        onCloseProject={desktopHost && project ? () => void onCloseProject() : undefined}
+        onBackToViewer={desktopHost && homeOpen && !empty ? () => setHomeOpen(false) : undefined}
         canLoad={!desktopHost || Boolean(project)}
       />
       {desktopHost && homeOpen ? (
@@ -1136,7 +1272,7 @@ export default function App() {
           className="relative min-h-0 flex-1"
           onDragOver={(event) => {
             event.preventDefault()
-            setDragActive(true)
+            if (project) setDragActive(true)
           }}
           onDragLeave={() => setDragActive(false)}
           onDrop={onDrop}

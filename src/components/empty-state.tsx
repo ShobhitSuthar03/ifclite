@@ -1,140 +1,210 @@
-import { FolderPlus, FolderOpen, Upload } from 'lucide-react'
+import { FolderPlus, FolderOpen, Upload, Box } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { ProjectRecord } from '@/lib/projects'
 
 type EmptyStateProps = {
   onOpen: () => void
-  onSample: () => void
   dragActive: boolean
+  busy?: boolean
   projectsEnabled?: boolean
   projectsRoot?: string | null
   projects?: ProjectRecord[]
   currentProject?: ProjectRecord | null
+  hasOpenModel?: boolean
   onCreateProject?: (name: string) => void
   onOpenProject?: (id: string) => void
-  onDismiss?: () => void
+  onCloseProject?: () => void
+  onBackToViewer?: () => void
 }
 
 export function EmptyState({
   onOpen,
-  onSample,
   dragActive,
+  busy = false,
   projectsEnabled = false,
   projectsRoot,
   projects = [],
   currentProject,
+  hasOpenModel = false,
   onCreateProject,
   onOpenProject,
-  onDismiss,
+  onCloseProject,
+  onBackToViewer,
 }: EmptyStateProps) {
-  const needsProject = projectsEnabled && !currentProject
+  if (!projectsEnabled) {
+    return (
+      <div
+        className={cn(
+          'flex h-full flex-col items-center justify-center gap-6 px-6 text-center',
+          dragActive
+            ? 'bg-primary/20 ring-2 ring-primary/50 ring-inset'
+            : 'bg-[radial-gradient(circle_at_center,var(--viewport-mid)_0%,var(--viewport)_100%)]',
+        )}
+      >
+        <div className="max-w-md space-y-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">IFClite</p>
+          <h2 className="text-[24px] font-semibold tracking-tight">Open an IFC file</h2>
+          <p className="text-[14px] leading-relaxed text-muted-foreground">
+            Drop a file here or choose one from disk. Project folders are available in the desktop app.
+          </p>
+        </div>
+        <Button size="lg" onClick={onOpen} disabled={busy}>
+          <Upload className="h-4 w-4" />
+          Open IFC
+        </Button>
+      </div>
+    )
+  }
+
   const folder = projectsRoot ?? 'Documents\\IFCLite'
+  const waitingForIfc = Boolean(currentProject && !currentProject.fileName)
+  const canDrop = Boolean(currentProject)
 
   return (
     <div
       className={cn(
-        'flex h-full flex-col items-center justify-center gap-6 px-6 text-center',
-        dragActive
-          ? 'bg-primary/20 ring-2 ring-primary/50 ring-inset'
-          : 'bg-[radial-gradient(circle_at_center,var(--viewport-mid)_0%,var(--viewport)_100%)]',
+        'flex h-full min-h-0 flex-col bg-background lg:flex-row',
+        dragActive && canDrop && 'ring-2 ring-primary/50 ring-inset',
       )}
     >
-      <div className="max-w-xl space-y-3">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">IFClite Desktop</p>
-        <h2 className="text-[24px] font-semibold tracking-tight">
-          {needsProject ? 'Start a project' : currentProject ? `Add a model to ${currentProject.name}` : 'Open an IFC model'}
-        </h2>
-        <p className="text-[14px] leading-relaxed text-muted-foreground">
-          {needsProject
-            ? `Give the job a name. Everything for it — the IFC copy, 3D cache, and reports — is saved in ${folder}. Next time, click the project in the list. You do not start from a blank viewer.`
-            : currentProject
-              ? 'Step 2 of 2: open an IFC. The file is copied into this project. The first open builds 3D; later opens reuse that saved 3D.'
-              : 'Drop an IFC here or use Open IFC. Project folders (Documents\\IFCLite) only appear in the desktop app, not in a browser tab.'}
-        </p>
-      </div>
+      <aside className="w-full shrink-0 overflow-auto border-b border-border p-6 lg:w-[360px] lg:border-b-0 lg:border-r">
+        <div className="mb-6 space-y-1">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">Projects</p>
+          <h2 className="text-[22px] font-semibold tracking-tight">Your workspace</h2>
+          <p className="text-[13px] leading-relaxed text-muted-foreground">
+            Create a project, upload an IFC, then close and reopen it later.
+          </p>
+          <p className="truncate font-mono text-[11px] text-muted-foreground">{folder}</p>
+        </div>
 
-      {needsProject ? (
-        <ol className="w-full max-w-xl space-y-2 text-left text-[13px] text-muted-foreground">
-          <li className="rounded-md border border-primary/40 bg-card px-3 py-2 text-foreground">
-            <span className="mr-2 font-semibold text-primary">1</span>
-            Type a project name and click Create project
-          </li>
-          <li className="rounded-md border border-border bg-card/60 px-3 py-2">
-            <span className="mr-2 font-semibold text-foreground">2</span>
-            Open an IFC (or drop it on this screen)
-          </li>
-          <li className="rounded-md border border-border bg-card/60 px-3 py-2">
-            <span className="mr-2 font-semibold text-foreground">3</span>
-            Work in 3D — it is stored under this project
-          </li>
-        </ol>
-      ) : null}
+        <section className="space-y-3">
+          <h3 className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+            New project
+          </h3>
+          <ProjectCreateForm onCreate={(name) => onCreateProject?.(name)} disabled={busy || !onCreateProject} />
+        </section>
 
-      {needsProject ? (
-        <ProjectCreateForm
-          onCreate={(name) => onCreateProject?.(name)}
-          disabled={!onCreateProject}
-        />
-      ) : (
-        <div className="flex flex-wrap items-center justify-center gap-2">
-          <button
-            type="button"
-            onClick={onOpen}
-            className="inline-flex h-10 items-center gap-2 rounded bg-primary px-4 text-[13px] font-medium text-white"
-          >
-            <Upload className="h-4 w-4" />
-            Open IFC file
-          </button>
-          <button
-            type="button"
-            onClick={onSample}
-            className="inline-flex h-10 items-center rounded border border-border px-4 text-[13px]"
-          >
-            Try the two-wall demo
-          </button>
-          {onDismiss ? (
+        {waitingForIfc ? (
+          <section className="mt-8 space-y-3">
+            <h3 className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Upload IFC
+            </h3>
             <button
               type="button"
-              onClick={onDismiss}
-              className="inline-flex h-10 items-center rounded border border-border px-4 text-[13px]"
+              onClick={onOpen}
+              disabled={busy}
+              className={cn(
+                'flex w-full flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-8 text-center',
+                dragActive
+                  ? 'border-primary bg-primary/10'
+                  : 'border-border bg-card hover:border-primary/60 hover:bg-accent/40',
+              )}
             >
-              Return to 3D view
+              <Upload className="h-5 w-5 text-primary" />
+              <span className="text-[14px] font-medium">Upload IFC to {currentProject?.name}</span>
+              <span className="text-[12px] text-muted-foreground">Drop a file here or click to browse</span>
             </button>
-          ) : null}
-        </div>
-      )}
+            {onCloseProject ? (
+              <Button variant="outline" className="w-full" onClick={onCloseProject} disabled={busy}>
+                Close project
+              </Button>
+            ) : null}
+          </section>
+        ) : currentProject ? (
+          <section className="mt-8 space-y-3">
+            <h3 className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Current project
+            </h3>
+            <div className="rounded-lg border border-border bg-card p-4">
+              <p className="truncate text-[14px] font-medium">{currentProject.name}</p>
+              <p className="mt-1 truncate text-[12px] text-muted-foreground">
+                {currentProject.fileName ?? 'No IFC yet'}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {hasOpenModel && onBackToViewer ? (
+                  <Button size="sm" onClick={onBackToViewer}>
+                    Back to 3D
+                  </Button>
+                ) : currentProject.fileName && onOpenProject ? (
+                  <Button size="sm" onClick={() => onOpenProject(currentProject.id)} disabled={busy}>
+                    Open in 3D
+                  </Button>
+                ) : null}
+                <Button size="sm" variant="outline" onClick={onOpen} disabled={busy}>
+                  Replace IFC
+                </Button>
+                {onCloseProject ? (
+                  <Button size="sm" variant="ghost" onClick={onCloseProject} disabled={busy}>
+                    Close
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          </section>
+        ) : null}
+      </aside>
 
-      {projectsEnabled && projects.length > 0 ? (
-        <div className="w-full max-w-xl space-y-2 text-left">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            Open a saved project
-          </p>
-          <ul className="max-h-56 overflow-auto rounded-md border border-border bg-card">
-            {projects.map((project) => (
-              <li key={project.id}>
-                <button
-                  type="button"
-                  onClick={() => onOpenProject?.(project.id)}
-                  className={cn(
-                    'flex w-full items-center gap-2 px-3 py-2.5 text-left text-[13px] hover:bg-accent',
-                    currentProject?.id === project.id && 'bg-accent',
-                  )}
-                >
-                  <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate font-medium">{project.name}</span>
-                  <span className="truncate text-[11px] text-muted-foreground">
-                    {project.fileName ? `Open ${project.fileName}` : 'No IFC yet'}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
+      <main className="min-h-0 flex-1 overflow-auto p-6">
+        <div className="mb-4 flex items-baseline justify-between gap-3">
+          <h3 className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Saved projects
+          </h3>
+          <span className="text-[12px] text-muted-foreground">
+            {projects.length === 0 ? 'None yet' : `${projects.length} saved`}
+          </span>
         </div>
-      ) : projectsEnabled && needsProject ? (
-        <p className="text-[12px] text-muted-foreground">No saved projects yet.</p>
-      ) : null}
+
+        {projects.length === 0 ? (
+          <div className="flex h-[min(320px,50vh)] flex-col items-center justify-center rounded-lg border border-dashed border-border bg-card/40 px-6 text-center">
+            <Box className="mb-3 h-8 w-8 text-muted-foreground" />
+            <p className="text-[14px] font-medium">No projects yet</p>
+            <p className="mt-1 max-w-sm text-[13px] text-muted-foreground">
+              Name a project on the left, then upload an IFC. You can close it and reopen it from this list.
+            </p>
+          </div>
+        ) : (
+          <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-card">
+            {projects.map((item) => {
+              const active = currentProject?.id === item.id
+              const action = item.fileName ? 'Open' : 'Continue'
+              return (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onOpenProject?.(item.id)}
+                    className={cn(
+                      'flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-accent',
+                      active && 'bg-accent',
+                    )}
+                  >
+                    <FolderOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[14px] font-medium">{item.name}</span>
+                      <span className="block truncate text-[12px] text-muted-foreground">
+                        {item.fileName ?? 'No IFC yet'}
+                        {item.updatedAtMs ? ` · ${formatProjectDate(item.updatedAtMs)}` : ''}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-[12px] font-medium text-primary">{action}</span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </main>
     </div>
   )
+}
+
+function formatProjectDate(ms: number): string {
+  return new Date(ms).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  })
 }
 
 function ProjectCreateForm({
@@ -146,7 +216,7 @@ function ProjectCreateForm({
 }) {
   return (
     <form
-      className="flex w-full max-w-xl flex-wrap items-center justify-center gap-2"
+      className="space-y-2"
       onSubmit={(event) => {
         event.preventDefault()
         const form = event.currentTarget
@@ -162,18 +232,14 @@ function ProjectCreateForm({
         type="text"
         required
         autoFocus
-        placeholder="e.g. Tower A – Level 3"
+        placeholder="Project name"
         disabled={disabled}
-        className="h-10 min-w-48 flex-1 rounded border border-border bg-background px-3 text-[13px] outline-none focus:border-primary"
+        className="h-10 w-full rounded-md border border-border bg-background px-3 text-[13px] outline-none focus:border-primary"
       />
-      <button
-        type="submit"
-        disabled={disabled}
-        className="inline-flex h-10 items-center gap-2 rounded bg-primary px-4 text-[13px] font-medium text-white disabled:opacity-50"
-      >
+      <Button type="submit" className="w-full" disabled={disabled}>
         <FolderPlus className="h-4 w-4" />
         Create project
-      </button>
+      </Button>
     </form>
   )
 }

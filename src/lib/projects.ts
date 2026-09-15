@@ -59,6 +59,10 @@ export async function openProject(id: string): Promise<ProjectSnapshot> {
   return flattenSnapshot(await invoke<ProjectSnapshot>('open_project', { id }))
 }
 
+export async function closeProject(): Promise<void> {
+  await invoke('close_project')
+}
+
 export async function importIfcPath(path: string, fileName?: string): Promise<ProjectSnapshot> {
   return flattenSnapshot(
     await invoke<ProjectSnapshot>('import_ifc_path', { path, fileName: fileName ?? null }),

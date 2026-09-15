@@ -8,6 +8,11 @@ export {
 } from '@/lib/bim-sql/database'
 export { ingestWarehouse, insertElementRecords, applyGeometryQuantities, collectElementRecords } from '@/lib/bim-sql/ingest'
 export {
+  spatialTreeFromWarehouse,
+  entityDataFromWarehouse,
+  elementLookupFromWarehouse,
+} from '@/lib/bim-sql/restore'
+export {
   REPORT_TEMPLATES,
   GROUP_BY_OPTIONS,
   METRIC_OPTIONS,

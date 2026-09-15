@@ -7,7 +7,15 @@ import { isDesktopShell as isTauri } from '@/lib/host'
 
 export type LoadSource =
   | { kind: 'buffer'; name: string; bytes: Uint8Array }
-  | { kind: 'path'; name: string; path: string; bytes?: Uint8Array; sizeBytes?: number }
+  | {
+      kind: 'path'
+      name: string
+      path: string
+      bytes?: Uint8Array
+      sizeBytes?: number
+      cacheKey?: string
+      skipParse?: boolean
+    }
 
 export type NativeCacheManifest = {
   version: number
@@ -140,15 +148,6 @@ export function pickIfcFileInBrowser(): Promise<LoadSource | null> {
   })
 }
 
-export async function loadSampleModel(): Promise<LoadSource> {
-  const response = await fetch('/sample.ifc')
-  if (!response.ok) {
-    throw new Error('Could not fetch the bundled sample IFC.')
-  }
-  const bytes = new Uint8Array(await response.arrayBuffer())
-  return { kind: 'buffer', name: 'sample.ifc', bytes }
-}
-
 export async function loadIfcModel(
   source: LoadSource,
   onProgress: (progress: LoadProgress) => void,
@@ -177,7 +176,8 @@ export async function loadIfcModel(
   const path = source.kind === 'path' ? source.path : null
   const bytes: Uint8Array | null = source.kind === 'buffer' ? source.bytes : (source.bytes ?? null)
   const cacheKey =
-    bytes != null ? await sha256Hex(bytes) : await invoke<string>('hash_ifc_path', { path: path ?? '' })
+    (source.kind === 'path' ? source.cacheKey : undefined) ??
+    (bytes != null ? await sha256Hex(bytes) : await invoke<string>('hash_ifc_path', { path: path ?? '' }))
   const fileBytes =
     source.kind === 'buffer' ? source.bytes.byteLength : (source.sizeBytes ?? bytes?.byteLength ?? 0)
 
@@ -284,7 +284,7 @@ export async function loadIfcModel(
     throw error
   }
 
-  processorNeedsRecycle = true
+  processorNeedsRecycle = !cacheHit
 
   onProgress({
     phase: 'complete',

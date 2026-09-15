@@ -61,6 +61,10 @@ impl ProjectBook {
     fn set_current(&self, project: ProjectRecord) {
         *self.current.lock() = Some(project);
     }
+
+    pub fn clear(&self) {
+        *self.current.lock() = None;
+    }
 }
 
 pub fn documents_ifclite(documents: &Path) -> PathBuf {
@@ -327,6 +331,12 @@ pub fn current_project(book: State<'_, ProjectBook>) -> Result<Option<ProjectRec
 }
 
 #[tauri::command]
+pub fn close_project(book: State<'_, ProjectBook>) -> Result<(), String> {
+    book.clear();
+    Ok(())
+}
+
+#[tauri::command]
 pub fn import_ifc_path(
     book: State<'_, ProjectBook>,
     path: String,
@@ -421,5 +431,16 @@ mod tests {
         let b = create_project_at(&root, "Tower").unwrap();
         assert_ne!(a.folder_path, b.folder_path);
         assert!(b.folder_path.ends_with("Tower-2") || b.id.contains("Tower"));
+    }
+
+    #[test]
+    fn close_clears_the_open_project() {
+        let book = ProjectBook::default();
+        let dir = tempdir().unwrap();
+        let project = create_project_at(&documents_ifclite(dir.path()), "Site").unwrap();
+        book.set_current(project);
+        assert!(book.current().is_some());
+        book.clear();
+        assert!(book.current().is_none());
     }
 }

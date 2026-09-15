@@ -12,9 +12,9 @@ use commands::{
     get_native_geometry_cache_stream_status, hash_ifc_path, read_ifc_bytes,
 };
 use projects::{
-    create_project, current_project, get_projects_root, import_ifc_bytes, import_ifc_path,
-    last_project, list_projects, open_project, save_project_session, save_project_warehouse,
-    ProjectBook,
+    close_project, create_project, current_project, get_projects_root, import_ifc_bytes,
+    import_ifc_path, last_project, list_projects, open_project, save_project_session,
+    save_project_warehouse, ProjectBook,
 };
 use std::sync::Arc;
 
@@ -41,6 +41,7 @@ pub fn run() {
             last_project,
             create_project,
             open_project,
+            close_project,
             current_project,
             import_ifc_path,
             import_ifc_bytes,

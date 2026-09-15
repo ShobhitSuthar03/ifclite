@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { openBimDatabase, closeBimDatabase } from '@/lib/bim-sql/database'
+import { openBimDatabase, closeBimDatabase, run } from '@/lib/bim-sql/database'
 import { insertElementRecords } from '@/lib/bim-sql/ingest'
+import { spatialTreeFromWarehouse, entityDataFromWarehouse } from '@/lib/bim-sql/restore'
 import { loadFilterOptions, queryElementIds, runReport } from '@/lib/bim-sql/queries'
 import { reportToCsv } from '@/lib/bim-sql/export'
 import type { ElementRecord } from '@/lib/bim-sql/types'
@@ -104,6 +105,42 @@ describe('bim sql warehouse', () => {
 
       const options = loadFilterOptions(db)
       expect(options.storeys).toEqual(['L1', 'L2'])
+    } finally {
+      closeBimDatabase(db)
+    }
+  })
+
+  it('rebuilds the spatial tree and properties from the saved warehouse', async () => {
+    const db = await openBimDatabase()
+    try {
+      run(db, `INSERT INTO models (name, version_id, loaded_at) VALUES ('a.ifc', 'abc', 'now')`)
+      run(
+        db,
+        `INSERT INTO spatial_locations (model_id, express_id, name, type, elevation, parent_express_id)
+         VALUES (1, 1, 'Project', 'IfcProject', NULL, NULL)`,
+      )
+      run(
+        db,
+        `INSERT INTO spatial_locations (model_id, express_id, name, type, elevation, parent_express_id)
+         VALUES (1, 10, 'L1', 'IfcBuildingStorey', 0, 1)`,
+      )
+      insertElementRecords(db, 1, [
+        record({
+          expressId: 21,
+          name: 'Wall A',
+          storeyId: 10,
+          properties: [{ pset: 'Pset_Wall', name: 'IsExternal', value: 'true', numeric: 1 }],
+          quantities: [{ qset: 'Qto_Wall', name: 'NetVolume', value: 2.5, unit: 'm3' }],
+        }),
+      ])
+      const tree = spatialTreeFromWarehouse(db)
+      expect(tree?.name).toBe('Project')
+      expect(tree?.children[0]?.name).toBe('L1')
+      expect(tree?.children[0]?.elementGroups[0]?.ids).toEqual([21])
+      const entity = entityDataFromWarehouse(db, 21, 'IfcWall')
+      expect(entity.name).toBe('Wall A')
+      expect(entity.propertySets[0]?.properties[0]?.name).toBe('IsExternal')
+      expect(entity.quantitySets[0]?.quantities[0]?.name).toBe('NetVolume')
     } finally {
       closeBimDatabase(db)
     }
