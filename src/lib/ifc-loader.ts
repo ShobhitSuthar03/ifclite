@@ -183,14 +183,14 @@ export async function loadIfcModel(
 
   let pipeline: LoadProgress['pipeline'] = 'wasm'
   let cacheHit = false
-  const collected: MeshData[] = []
+  let streamedMeshes = 0
   let totalMeshes = 0
   let coordinateInfo: CoordinateInfo | undefined
 
   const handleEvent = (event: StreamingGeometryEvent) => {
     if (event.type === 'batch') {
       const meshes = meshesToViewerFrame(event.meshes, pipeline)
-      collected.push(...meshes)
+      streamedMeshes += meshes.length
       onBatch(meshes)
       if (event.coordinateInfo) coordinateInfo = event.coordinateInfo
       onProgress({
@@ -284,24 +284,32 @@ export async function loadIfcModel(
     throw error
   }
 
-  processorNeedsRecycle = !cacheHit
-
   onProgress({
     phase: 'complete',
-    processed: collected.length,
-    total: totalMeshes || collected.length,
+    processed: streamedMeshes,
+    total: totalMeshes || streamedMeshes,
     cacheHit,
     pipeline,
   })
 
+  // Drop the tessellator before properties/warehouse/QTO run. Other IFC viewers
+  // also free the engine after triangles are out; keeping it plus the JS parse
+  // is what blows WebView2 on large files.
+  try {
+    await recycleGeometryProcessor()
+  } catch (caught) {
+    console.warn('Could not release the 3D engine after tessellation', caught)
+  }
+  processorNeedsRecycle = false
+
   return {
-    meshes: collected,
+    meshes: [],
     fileName: source.name,
     fileBytes,
     cacheKey,
     cacheHit,
     pipeline,
-    totalMeshes: totalMeshes || collected.length,
+    totalMeshes: totalMeshes || streamedMeshes,
     elapsedMs: Math.round(performance.now() - started),
     coordinateInfo,
   }

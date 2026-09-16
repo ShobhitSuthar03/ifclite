@@ -88,7 +88,7 @@ export function ToolStrip({
         title={
           canShowCalculatedView
             ? 'Toggle between native materials and calculated quantity colors'
-            : 'Calculate quantities for a selection first'
+            : 'Select elements to measure surfaces'
         }
         disabled={!canShowCalculatedView}
         className={cn(btn, calculatedView && 'bg-primary/20 text-primary')}

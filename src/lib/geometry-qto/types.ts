@@ -187,6 +187,8 @@ export type FormworkOptions = {
   targetIds?: Set<number>
   /** Copy triangle vertices for overlay (selected ids). */
   keepPositionsFor?: Set<number>
+  /** When set, overrides the default (keep positions unless targetIds is set). */
+  keepPositions?: boolean
 }
 
 export const DEFAULT_CONTACT_GAP = 0.005

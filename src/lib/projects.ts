@@ -64,6 +64,10 @@ export async function closeProject(): Promise<void> {
   await invoke('close_project')
 }
 
+export async function deleteProject(id: string): Promise<void> {
+  await invoke('delete_project', { id })
+}
+
 export async function importIfcPath(path: string, fileName?: string): Promise<ProjectSnapshot> {
   return flattenSnapshot(
     await invoke<ProjectSnapshot>('import_ifc_path', { path, fileName: fileName ?? null }),

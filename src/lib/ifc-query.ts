@@ -123,9 +123,6 @@ export function createIfcQuery(store: IfcDataStore): IfcQuery {
 
 export function executeQuery(store: IfcDataStore, spec: QuerySpec): QueryResultEntity[] {
   if (!isQueryActive(spec)) return []
-  if (spec.clauses.length > 0 && spec.typeScope === 'all' && spec.storeyId == null) {
-    throw new Error('Pick a type or storey before filtering on a property.')
-  }
 
   const query = new IfcQuery(store)
   let scoped =

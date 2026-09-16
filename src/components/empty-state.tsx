@@ -1,4 +1,4 @@
-import { FolderPlus, FolderOpen, Upload, Box } from 'lucide-react'
+import { FolderPlus, FolderOpen, Upload, Box, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { ProjectRecord } from '@/lib/projects'
@@ -15,6 +15,7 @@ type EmptyStateProps = {
   onCreateProject?: (name: string) => void
   onOpenProject?: (id: string) => void
   onCloseProject?: () => void
+  onDeleteProject?: (id: string) => void
   onBackToViewer?: () => void
 }
 
@@ -30,6 +31,7 @@ export function EmptyState({
   onCreateProject,
   onOpenProject,
   onCloseProject,
+  onDeleteProject,
   onBackToViewer,
 }: EmptyStateProps) {
   if (!projectsEnabled) {
@@ -110,6 +112,16 @@ export function EmptyState({
                 Close project
               </Button>
             ) : null}
+            {onDeleteProject && currentProject ? (
+              <Button
+                variant="ghost"
+                className="w-full text-destructive hover:bg-destructive/10 hover:text-destructive"
+                onClick={() => onDeleteProject(currentProject.id)}
+                disabled={busy}
+              >
+                Delete project
+              </Button>
+            ) : null}
           </section>
         ) : currentProject ? (
           <section className="mt-8 space-y-3">
@@ -137,6 +149,17 @@ export function EmptyState({
                 {onCloseProject ? (
                   <Button size="sm" variant="ghost" onClick={onCloseProject} disabled={busy}>
                     Close
+                  </Button>
+                ) : null}
+                {onDeleteProject ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => onDeleteProject(currentProject.id)}
+                    disabled={busy}
+                  >
+                    Delete
                   </Button>
                 ) : null}
               </div>
@@ -170,25 +193,41 @@ export function EmptyState({
               const action = item.fileName ? 'Open' : 'Continue'
               return (
                 <li key={item.id}>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => onOpenProject?.(item.id)}
+                  <div
                     className={cn(
                       'flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-accent',
                       active && 'bg-accent',
                     )}
                   >
-                    <FolderOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[14px] font-medium">{item.name}</span>
-                      <span className="block truncate text-[12px] text-muted-foreground">
-                        {item.fileName ?? 'No IFC yet'}
-                        {item.updatedAtMs ? ` · ${formatProjectDate(item.updatedAtMs)}` : ''}
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => onOpenProject?.(item.id)}
+                      className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                    >
+                      <FolderOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[14px] font-medium">{item.name}</span>
+                        <span className="block truncate text-[12px] text-muted-foreground">
+                          {item.fileName ?? 'No IFC yet'}
+                          {item.updatedAtMs ? ` · ${formatProjectDate(item.updatedAtMs)}` : ''}
+                        </span>
                       </span>
-                    </span>
-                    <span className="shrink-0 text-[12px] font-medium text-primary">{action}</span>
-                  </button>
+                      <span className="shrink-0 text-[12px] font-medium text-primary">{action}</span>
+                    </button>
+                    {onDeleteProject ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        title={`Delete ${item.name}`}
+                        aria-label={`Delete ${item.name}`}
+                        onClick={() => onDeleteProject(item.id)}
+                        className="shrink-0 rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    ) : null}
+                  </div>
                 </li>
               )
             })}

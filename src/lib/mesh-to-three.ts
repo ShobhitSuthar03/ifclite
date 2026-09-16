@@ -5,10 +5,9 @@ import type { MeshData } from '@ifc-lite/geometry'
 export function meshDataToThree(mesh: MeshData): THREE.Mesh {
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3))
-  if (mesh.normals && mesh.normals.length === mesh.positions.length) {
+  const hasNormals = Boolean(mesh.normals && mesh.normals.length === mesh.positions.length)
+  if (hasNormals) {
     geometry.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3))
-  } else {
-    geometry.computeVertexNormals()
   }
   geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1))
   geometry.computeBoundingSphere()
@@ -18,9 +17,9 @@ export function meshDataToThree(mesh: MeshData): THREE.Mesh {
     color: new THREE.Color(r, g, b),
     transparent: a < 1,
     opacity: a,
-    // DoubleSide even for opaque: IFC triangle winding is not reliably outward.
     side: THREE.DoubleSide,
     depthWrite: a >= 1,
+    flatShading: !hasNormals,
   })
 
   const threeMesh = new THREE.Mesh(geometry, material)

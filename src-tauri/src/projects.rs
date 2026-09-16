@@ -1,4 +1,4 @@
-use crate::cache::GeometryCache;
+use crate::cache::{default_cache_dir, GeometryCache};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -347,6 +347,43 @@ pub fn close_project(book: State<'_, ProjectBook>) -> Result<(), String> {
     Ok(())
 }
 
+fn delete_project_at(root: &Path, id: &str) -> Result<PathBuf, String> {
+    let project = find_project(root, id)?;
+    let folder = PathBuf::from(&project.folder_path);
+    let root_canon = fs::canonicalize(root).map_err(|err| err.to_string())?;
+    let folder_canon = fs::canonicalize(&folder).map_err(|err| err.to_string())?;
+    if !folder_canon.starts_with(&root_canon) {
+        return Err("refusing to delete a folder outside the projects directory".into());
+    }
+    fs::remove_dir_all(&folder_canon).map_err(|err| format!("could not delete project: {err}"))?;
+    let mut catalog = read_catalog(root);
+    if catalog.last_project_id.as_deref() == Some(project.id.as_str()) {
+        catalog.last_project_id = None;
+        write_catalog(root, &catalog)?;
+    }
+    Ok(folder_canon)
+}
+
+#[tauri::command]
+pub fn delete_project(
+    app: AppHandle,
+    cache: State<'_, std::sync::Arc<GeometryCache>>,
+    book: State<'_, ProjectBook>,
+    id: String,
+) -> Result<(), String> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        return Err("project id is required".into());
+    }
+    let root = root_dir(&app)?;
+    if book.current().is_some_and(|current| current.id == trimmed) {
+        book.clear();
+        cache.set_dir(default_cache_dir());
+    }
+    delete_project_at(&root, trimmed)?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn import_ifc_path(
     book: State<'_, ProjectBook>,
@@ -542,5 +579,17 @@ mod tests {
         assert!(book.current().is_some());
         book.clear();
         assert!(book.current().is_none());
+    }
+
+    #[test]
+    fn delete_removes_the_project_folder() {
+        let dir = tempdir().unwrap();
+        let root = documents_ifclite(dir.path());
+        let project = create_project_at(&root, "To Remove").unwrap();
+        let folder = PathBuf::from(&project.folder_path);
+        assert!(folder.exists());
+        delete_project_at(&root, &project.id).unwrap();
+        assert!(!folder.exists());
+        assert!(list_projects_at(&root).unwrap().is_empty());
     }
 }

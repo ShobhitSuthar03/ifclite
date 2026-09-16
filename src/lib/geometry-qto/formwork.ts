@@ -177,7 +177,9 @@ export function computeElementQuantities(meshes: QtoMesh[], options?: FormworkOp
   const elements: ElementQuantity[] = [...grouped.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([expressId, faces]) => {
-      const keepPositions = keepPositionsFor ? keepPositionsFor.has(expressId) : !targetIds
+      const keepPositions = keepPositionsFor
+        ? keepPositionsFor.has(expressId)
+        : (options?.keepPositions ?? !targetIds)
       const quantities = faces.map((face) => {
         const hit = overlaps.get(face.faceId) ?? { overlapArea: 0, overlappingIds: [] }
         return toQuantity(face, hit.overlapArea, hit.overlappingIds, keepPositions)
@@ -254,12 +256,22 @@ export function computeColumnFormwork(meshes: QtoMesh[], options?: FormworkOptio
 export function filterQuantities(result: QuantityResult, keepIds: Set<number> | null): QuantityResult {
   if (!keepIds) return result
   const elements = result.elements.filter((item) => keepIds.has(item.expressId))
+  return mergeQuantityElements(elements)
+}
+
+export const filterFormwork = filterQuantities
+
+/** Combine per-element rows (e.g. chunked whole-model passes) into one takeoff. */
+export function mergeQuantityElements(elements: ElementQuantity[]): QuantityResult {
+  const byId = new Map<number, ElementQuantity>()
+  for (const element of elements) byId.set(element.expressId, element)
+  const merged = [...byId.values()].sort((a, b) => a.expressId - b.expressId)
   const totals = emptyTotals()
-  for (const element of elements) addTotals(totals, element)
+  for (const element of merged) addTotals(totals, element)
   return {
-    elements,
-    elementCount: elements.length,
-    columnCount: elements.filter((item) => isColumnType(item.ifcType)).length,
+    elements: merged,
+    elementCount: merged.length,
+    columnCount: merged.filter((item) => isColumnType(item.ifcType)).length,
     totals,
     grossArea: totals.GROSSAREA,
     overlapArea: totals.COVEREDAREA,
@@ -267,4 +279,22 @@ export function filterQuantities(result: QuantityResult, keepIds: Set<number> | 
   }
 }
 
-export const filterFormwork = filterQuantities
+/** Fill overlay/pick triangle soups from live meshes without rerunning takeoff. */
+export function hydrateFacePositions(element: ElementQuantity, meshes: QtoMesh[]): ElementQuantity {
+  if (element.faces.length === 0) return element
+  if (element.faces.every((face) => face.positions.length > 0)) return element
+  const owned = meshes.filter((mesh) => mesh.expressId === element.expressId)
+  if (owned.length === 0) return element
+  const extracted = extractFaces(owned)
+  const positions = new Map<string, number[]>()
+  for (const face of extracted) {
+    positions.set(face.faceId, flattenTriangles(face.triangles))
+  }
+  return {
+    ...element,
+    faces: element.faces.map((face) => ({
+      ...face,
+      positions: face.positions.length > 0 ? face.positions : (positions.get(face.faceId) ?? []),
+    })),
+  }
+}

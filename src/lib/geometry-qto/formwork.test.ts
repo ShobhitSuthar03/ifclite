@@ -1,8 +1,9 @@
 import { extractFaces } from '@/lib/geometry-qto/faces'
 import { boxMesh } from '@/lib/geometry-qto/box-mesh'
-import { computeColumnFormwork, computeElementQuantities } from '@/lib/geometry-qto/formwork'
+import { computeColumnFormwork, computeElementQuantities, hydrateFacePositions } from '@/lib/geometry-qto/formwork'
 import { isBuildingElementType } from '@/lib/geometry-qto/faces'
-import { meshesForQuantityJob } from '@/lib/geometry-qto/job'
+import { meshesForQuantityJob, typeQtoMeshes } from '@/lib/geometry-qto/job'
+import { runWholeModelQuantities } from '@/lib/geometry-qto/run-qto'
 import { DEFAULT_CONTACT_GAP } from '@/lib/geometry-qto/types'
 import { describe, expect, it } from 'vitest'
 
@@ -74,6 +75,15 @@ describe('computeElementQuantities', () => {
     const result = computeElementQuantities([untyped])
     expect(result.elementCount).toBe(1)
     almost(result.elements[0].metrics.VOLUME, 0.48)
+    expect(result.elements[0].faces.some((face) => face.positions.length > 0)).toBe(true)
+  })
+
+  it('typeQtoMeshes fills missing IFC class names from a lookup', () => {
+    const column = boxMesh(10, 'IfcColumn', [0, 0, 0], [0.4, 3, 0.4])
+    const { ifcType: _ifcType, ...untyped } = column
+    void _ifcType
+    const typed = typeQtoMeshes([untyped], (id) => (id === 10 ? 'IfcWall' : undefined))
+    expect(typed[0]?.ifcType).toBe('IfcWall')
   })
 
   it('fills area metrics for an isolated rectangular column', () => {
@@ -186,5 +196,19 @@ describe('on-demand selection takeoff', () => {
     expect(result.elements.map((item) => item.expressId)).toEqual([10])
     almost(result.elements[0].metrics.COVEREDAREA, 0.4 * 3)
     expect(result.elements[0].faces[0].positions.length).toBeGreaterThan(0)
+  })
+})
+
+describe('whole-model takeoff without storing triangle soups', () => {
+  it('keeps numbers and hydrates overlay vertices from live meshes', async () => {
+    const column = boxMesh(10, 'IfcColumn', [0, 0, 0], [0.4, 3, 0.4])
+    const wall = boxMesh(20, 'IfcWall', [0.4, 0, 0], [0.6, 3, 0.4])
+    const full = computeElementQuantities([column, wall], { keepPositions: false })
+    expect(full.elements.every((item) => item.faces.every((face) => face.positions.length === 0))).toBe(true)
+    const chunked = await runWholeModelQuantities([column, wall], { chunkSize: 1 })
+    almost(chunked.netArea, full.netArea)
+    almost(chunked.elements[0].metrics.COVEREDAREA, full.elements[0].metrics.COVEREDAREA)
+    const hydrated = hydrateFacePositions(chunked.elements[0], [column, wall])
+    expect(hydrated.faces.some((face) => face.positions.length > 0)).toBe(true)
   })
 })

@@ -30,16 +30,36 @@ function spatialType(name: string): IfcTypeEnum {
   }
 }
 
-export function elementLookupFromWarehouse(db: BimDatabase): Map<number, WarehouseLookup> {
-  const rows = all<ElementRow>(db, 'SELECT express_id, ifc_type, name, storey_id FROM elements')
-  const lookup = new Map<number, WarehouseLookup>()
-  for (const row of rows) {
-    lookup.set(row.express_id, {
-      name: row.name ?? '',
-      ifcType: row.ifc_type || 'IfcProduct',
-    })
+export type WarehouseElementLookup = {
+  get(id: number): WarehouseLookup | undefined
+}
+
+/** Per-id lookup. Do not SELECT the whole elements table on open — that freeze-crashes WebView2. */
+export function elementLookupFromWarehouse(db: BimDatabase): WarehouseElementLookup {
+  const cache = new Map<number, WarehouseLookup | null>()
+  return {
+    get(id: number) {
+      if (cache.has(id)) return cache.get(id) ?? undefined
+      try {
+        const row = all<ElementRow>(
+          db,
+          'SELECT express_id, ifc_type, name, storey_id FROM elements WHERE express_id = ? LIMIT 1',
+          [id],
+        )[0]
+        if (!row) {
+          cache.set(id, null)
+          return undefined
+        }
+        const value = { name: row.name ?? '', ifcType: row.ifc_type || 'IfcProduct' }
+        cache.set(id, value)
+        return value
+      } catch (caught) {
+        console.warn('Warehouse element lookup failed', caught)
+        cache.set(id, null)
+        return undefined
+      }
+    },
   }
-  return lookup
 }
 
 export function spatialTreeFromWarehouse(db: BimDatabase): SpatialTreeNode | null {

@@ -1,210 +1,181 @@
+import { useMemo, useState } from 'react'
 import { IfcTypeEnum } from '@ifc-lite/data'
-import { Plus, X } from 'lucide-react'
+import { Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import type { IfcDataStore } from '@/lib/ifc-data'
-import {
-  EMPTY_QUERY,
-  OPERATORS,
-  QUERY_PRESETS,
-  TYPE_OPTIONS,
-  type PropertyClause,
-  type QuerySpec,
-  type TypeScope,
-} from '@/lib/ifc-query'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { PropertyValueTree } from '@/components/property-value-tree'
+import { groupingCatalog, type PropertyCatalogSet } from '@/lib/bim-sql'
+import type { SpatialTreeNode } from '@/lib/ifc-data'
+import { EMPTY_QUERY, TYPE_OPTIONS, type QuerySpec, type TypeScope } from '@/lib/ifc-query'
+import { propertyRefKey, samePropertyRef, type PropertyRef, type PropertyTreeNode } from '@/lib/property-tree'
 import { cn, formatCount } from '@/lib/utils'
 
 const fieldClass =
   'h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus-visible:border-primary disabled:opacity-50'
 
 type FilterBarProps = {
-  store: IfcDataStore | null
+  ready: boolean
+  hint?: string | null
+  spatialRoot: SpatialTreeNode | null
+  catalog: PropertyCatalogSet[]
   spec: QuerySpec
+  selectedProperty: PropertyRef | null
+  valueTree: PropertyTreeNode[]
+  selectedKey: string | null
   matchCount: number | null
   error: string | null
   onChange: (spec: QuerySpec) => void
+  onSelectProperty: (ref: PropertyRef | null) => void
+  onSelectValue: (node: PropertyTreeNode | null) => void
 }
 
-export function FilterBar({ store, spec, matchCount, error, onChange }: FilterBarProps) {
-  const storeys = store?.spatialHierarchy?.project ? flattenStoreys(store) : []
-  const disabled = store == null
+export function FilterBar({
+  ready,
+  hint,
+  spatialRoot,
+  catalog,
+  spec,
+  selectedProperty,
+  valueTree,
+  selectedKey,
+  matchCount,
+  error,
+  onChange,
+  onSelectProperty,
+  onSelectValue,
+}: FilterBarProps) {
+  const [search, setSearch] = useState('')
+  const storeys = spatialRoot ? flattenStoreys(spatialRoot) : []
+  const disabled = !ready
+  const groups = useMemo(() => groupingCatalog(catalog, search), [catalog, search])
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2.5 overflow-auto p-3">
-      <label className="flex flex-col gap-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-        Target class
-        <select
-          className={fieldClass}
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="space-y-2 border-b border-border p-3">
+        <p className="text-[11px] text-muted-foreground">
+          Unique properties from this model. Pick a property, then click a value to select those elements.
+        </p>
+        {hint ? <p className="text-[11px] text-muted-foreground">{hint}</p> : null}
+        <div className="grid grid-cols-2 gap-1.5">
+          <select
+            className={fieldClass}
+            disabled={disabled}
+            value={spec.typeScope}
+            onChange={(event) => onChange({ ...spec, typeScope: event.target.value as TypeScope, clauses: [] })}
+          >
+            {TYPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <select
+            className={fieldClass}
+            disabled={disabled}
+            value={spec.storeyId ?? ''}
+            onChange={(event) =>
+              onChange({
+                ...spec,
+                storeyId: event.target.value === '' ? null : Number(event.target.value),
+                clauses: [],
+              })
+            }
+          >
+            <option value="">All storeys</option>
+            {storeys.map((storey) => (
+              <option key={storey.id} value={storey.id}>
+                {storey.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <label className="relative block">
+          <Search className="pointer-events-none absolute top-2 left-2 h-3.5 w-3.5 text-muted-foreground" />
+          <input
+            className={cn(fieldClass, 'pl-7')}
+            disabled={disabled}
+            value={search}
+            placeholder="Search properties"
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </label>
+      </div>
+      <div className="grid min-h-0 flex-1 grid-rows-2">
+        <ScrollArea className="min-h-0 border-b border-border">
+          {groups.length === 0 ? (
+            <p className="px-3 py-6 text-xs text-muted-foreground italic">No properties match.</p>
+          ) : (
+            groups.map((group) => (
+              <div key={`${group.kind}:${group.set}`} className="py-1">
+                <p className="px-3 py-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+                  {group.set}
+                </p>
+                {group.names.map((name) => {
+                  const ref: PropertyRef = { set: group.set, name, kind: group.kind }
+                  const active = selectedProperty ? samePropertyRef(selectedProperty, ref) : false
+                  return (
+                    <button
+                      key={propertyRefKey(ref)}
+                      type="button"
+                      disabled={disabled}
+                      className={cn(
+                        'flex w-full px-3 py-1 text-left text-[13px] hover:bg-accent disabled:opacity-40',
+                        active && 'bg-primary/20',
+                      )}
+                      onClick={() => onSelectProperty(active ? null : ref)}
+                    >
+                      {name}
+                    </button>
+                  )
+                })}
+              </div>
+            ))
+          )}
+        </ScrollArea>
+        <ScrollArea className="min-h-0">
+          {!selectedProperty ? (
+            <p className="px-3 py-6 text-xs text-muted-foreground">Choose a property to list its unique values.</p>
+          ) : valueTree.length === 0 ? (
+            <p className="px-3 py-6 text-xs text-muted-foreground italic">No values in this scope.</p>
+          ) : (
+            <PropertyValueTree
+              nodes={valueTree}
+              selectedKey={selectedKey}
+              onSelect={(node) => onSelectValue(selectedKey === node.key ? null : node)}
+            />
+          )}
+        </ScrollArea>
+      </div>
+      <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2">
+        <p className="text-[11px] text-muted-foreground">
+          {matchCount != null ? `${formatCount(matchCount)} selected` : 'Click a value to select'}
+        </p>
+        <Button
+          variant="ghost"
+          size="sm"
           disabled={disabled}
-          value={spec.typeScope}
-          onChange={(event) => onChange({ ...spec, typeScope: event.target.value as TypeScope })}
-        >
-          {TYPE_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="flex flex-col gap-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-        Storey
-        <select
-          className={fieldClass}
-          disabled={disabled}
-          value={spec.storeyId ?? ''}
-          onChange={(event) =>
-            onChange({
-              ...spec,
-              storeyId: event.target.value === '' ? null : Number(event.target.value),
-            })
-          }
-        >
-          <option value="">All storeys</option>
-          {storeys.map((storey) => (
-            <option key={storey.id} value={storey.id}>
-              {storey.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="flex flex-col gap-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-        Preset
-        <select
-          className={fieldClass}
-          disabled={disabled}
-          value=""
-          onChange={(event) => {
-            const preset = QUERY_PRESETS.find((item) => item.id === event.target.value)
-            if (preset) onChange({ ...preset.spec, storeyId: spec.storeyId })
+          onClick={() => {
+            onChange(EMPTY_QUERY)
+            onSelectProperty(null)
+            onSelectValue(null)
           }}
         >
-          <option value="">Apply preset…</option>
-          {QUERY_PRESETS.map((preset) => (
-            <option key={preset.id} value={preset.id}>
-              {preset.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <p className="text-[11px] text-muted-foreground">
-        Matching elements isolate in the viewport. Pick a type or storey before adding a property clause.
-      </p>
-      <div className="flex gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="flex-1"
-          disabled={disabled || (spec.typeScope === 'all' && spec.storeyId == null)}
-          onClick={() =>
-            onChange({
-              ...spec,
-              clauses: [
-                ...spec.clauses,
-                { id: crypto.randomUUID(), pset: 'Pset_WallCommon', name: 'IsExternal', op: '=', value: 'true' },
-              ],
-            })
-          }
-        >
-          <Plus />
-          Property
-        </Button>
-        <Button variant="ghost" size="sm" disabled={disabled} onClick={() => onChange(EMPTY_QUERY)}>
           Clear
         </Button>
       </div>
-      {spec.clauses.map((clause) => (
-        <ClauseRow
-          key={clause.id}
-          clause={clause}
-          disabled={disabled}
-          onChange={(next) =>
-            onChange({
-              ...spec,
-              clauses: spec.clauses.map((item) => (item.id === clause.id ? next : item)),
-            })
-          }
-          onRemove={() => onChange({ ...spec, clauses: spec.clauses.filter((item) => item.id !== clause.id) })}
-        />
-      ))}
-      {matchCount != null && (
-        <p className="text-[11px] text-muted-foreground">
-          {formatCount(matchCount)} match{matchCount === 1 ? '' : 'es'} isolated
-        </p>
-      )}
-      {error && <p className="text-[11px] text-destructive">{error}</p>}
+      {error ? <p className="px-3 pb-2 text-[11px] text-destructive">{error}</p> : null}
     </div>
   )
 }
 
-function ClauseRow({
-  clause,
-  disabled,
-  onChange,
-  onRemove,
-}: {
-  clause: PropertyClause
-  disabled: boolean
-  onChange: (clause: PropertyClause) => void
-  onRemove: () => void
-}) {
-  return (
-    <div className="rounded border border-border p-2">
-      <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Property rule</span>
-        <Button variant="ghost" size="icon" className="h-6 w-6" disabled={disabled} onClick={onRemove}>
-          <X />
-        </Button>
-      </div>
-      <div className="grid grid-cols-2 gap-1.5">
-        <input
-          className={fieldClass}
-          disabled={disabled}
-          value={clause.pset}
-          placeholder="Pset or Qto"
-          onChange={(event) => onChange({ ...clause, pset: event.target.value })}
-        />
-        <input
-          className={fieldClass}
-          disabled={disabled}
-          value={clause.name}
-          placeholder="Property"
-          onChange={(event) => onChange({ ...clause, name: event.target.value })}
-        />
-        <select
-          className={fieldClass}
-          disabled={disabled}
-          value={clause.op}
-          onChange={(event) => onChange({ ...clause, op: event.target.value as PropertyClause['op'] })}
-        >
-          {OPERATORS.map((item) => (
-            <option key={item.value} value={item.value}>
-              {item.label}
-            </option>
-          ))}
-        </select>
-        <input
-          className={cn(fieldClass)}
-          disabled={disabled}
-          value={clause.value}
-          placeholder="Value"
-          onChange={(event) => onChange({ ...clause, value: event.target.value })}
-        />
-      </div>
-    </div>
-  )
-}
-
-function flattenStoreys(store: IfcDataStore): Array<{ id: number; name: string }> {
+function flattenStoreys(root: SpatialTreeNode): Array<{ id: number; name: string }> {
   const rows: Array<{ id: number; name: string }> = []
-  const walk = (node: NonNullable<IfcDataStore['spatialHierarchy']>['project']) => {
+  const walk = (node: SpatialTreeNode) => {
     if (node.type === IfcTypeEnum.IfcBuildingStorey) {
-      rows.push({
-        id: node.expressId,
-        name: node.name || store.entities.getName(node.expressId) || `Storey #${node.expressId}`,
-      })
+      rows.push({ id: node.expressId, name: node.name || `Storey #${node.expressId}` })
     }
     for (const child of node.children) walk(child)
   }
-  const project = store.spatialHierarchy?.project
-  if (project) walk(project)
+  walk(root)
   return rows
 }

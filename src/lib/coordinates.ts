@@ -14,7 +14,17 @@ export function zUpToYUp(x: number, y: number, z: number): [number, number, numb
   return [x, z, -y]
 }
 
+export function swapZUpToYUpTripletsInPlace(values: Float32Array): Float32Array {
+  for (let i = 0; i < values.length; i += 3) {
+    const y = values[i + 1]
+    values[i + 1] = values[i + 2]
+    values[i + 2] = -y
+  }
+  return values
+}
+
 export function swapZUpToYUpTriplets(source: ArrayLike<number>): Float32Array {
+  if (source instanceof Float32Array) return swapZUpToYUpTripletsInPlace(source)
   const out = new Float32Array(source.length)
   for (let i = 0; i < source.length; i += 3) {
     const y = source[i + 1]

@@ -1,10 +1,18 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import type { MeshData } from '@ifc-lite/geometry'
 import type { FaceQuantity } from '@/lib/geometry-qto'
 import { FaceLayerLegend } from '@/components/face-layer-legend'
-import { applyCameraFit } from '@/lib/fit-camera'
+import { applyCameraFitBox } from '@/lib/fit-camera'
+import type { ViewerMeshStore } from '@/lib/viewer-meshes'
+import {
+  ELEMENT_GHOST,
+  ELEMENT_HIDDEN,
+  ELEMENT_HOVER,
+  ELEMENT_SELECTED,
+  ELEMENT_SOLID,
+  ViewerBatchGroup,
+} from '@/lib/viewer-batches'
 import {
   addBasketFaceOverlay,
   addQuantityFaceOverlay,
@@ -13,14 +21,15 @@ import {
   toggleFaceLayer,
   type FaceLayer,
 } from '@/lib/geometry-qto/overlay-mesh'
-import { meshDataToThree } from '@/lib/mesh-to-three'
 import { isAdditiveModifier } from '@/lib/selection'
 import { VIEWPORT_THEME, type Theme } from '@/lib/theme'
 
 const DRAG_THRESHOLD_PX = 4
 
 type ViewerCanvasProps = {
-  meshes: MeshData[]
+  geometry: ViewerMeshStore
+  geometryComplete: boolean
+  onSceneReady?: () => void
   selectedIds: Set<number>
   isolatedIds: Set<number> | null
   hiddenIds: Set<number>
@@ -40,12 +49,14 @@ type ViewerCanvasProps = {
   /** Fires on every click with the raw hit geometry (not tied to the QTO overlay),
    * so the caller can match it against on-demand face data for basket picking. */
   onFaceCandidate?: (info: { expressId: number; point: [number, number, number]; normal: [number, number, number] } | null) => void
-  onRegisterBasket?: () => void
+  onRegisterBasket?: (propertyName: string) => void
   onClearBasket?: () => void
 }
 
 export const ViewerCanvas = memo(function ViewerCanvas({
-  meshes,
+  geometry,
+  geometryComplete,
+  onSceneReady,
   selectedIds,
   isolatedIds,
   hiddenIds,
@@ -65,6 +76,15 @@ export const ViewerCanvas = memo(function ViewerCanvas({
   onClearBasket,
 }: ViewerCanvasProps) {
   const [faceLayers, setFaceLayers] = useState<Set<FaceLayer>>(() => new Set(['all']))
+  const [propertyName, setPropertyName] = useState('')
+  const [meshPump, setMeshPump] = useState(0)
+  const onSceneReadyRef = useRef(onSceneReady)
+
+  useEffect(() => {
+    if (!geometryComplete) return
+    return geometry.subscribe(() => setMeshPump((tick) => tick + 1))
+  }, [geometry, geometryComplete])
+  const meshes = geometry.list()
 
   useEffect(() => {
     setFaceLayers(new Set(['all']))
@@ -88,13 +108,14 @@ export const ViewerCanvas = memo(function ViewerCanvas({
   const gridRef = useRef<THREE.GridHelper | null>(null)
   const sceneRef = useRef<THREE.Scene | null>(null)
   const meshIndexRef = useRef(0)
-  const meshById = useRef(new Map<number, THREE.Mesh[]>())
+  const batcherRef = useRef<ViewerBatchGroup | null>(null)
   const selectedIdsRef = useRef(selectedIds)
   const hoveredRef = useRef<number | null>(null)
   const isolatedRef = useRef<Set<number> | null>(null)
   const hiddenRef = useRef<Set<number>>(new Set())
   const ghostRef = useRef<Set<number>>(new Set())
   const viewIsolateRef = useRef<Set<number> | null>(null)
+  const geometryCompleteRef = useRef(geometryComplete)
   const onSelectRef = useRef(onSelect)
   const onHoverRef = useRef(onHover)
   const onSelectFaceRef = useRef(onSelectFace)
@@ -109,11 +130,13 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     onHoverRef.current = onHover
     onSelectFaceRef.current = onSelectFace
     onFaceCandidateRef.current = onFaceCandidate
+    onSceneReadyRef.current = onSceneReady
     isolatedRef.current = isolatedIds
     hiddenRef.current = hiddenIds
     ghostRef.current = ghostIds
     viewIsolateRef.current = viewIsolateIds
-  }, [onSelect, onHover, onSelectFace, onFaceCandidate, isolatedIds, hiddenIds, ghostIds, viewIsolateIds])
+    geometryCompleteRef.current = geometryComplete
+  }, [onSelect, onHover, onSelectFace, onFaceCandidate, onSceneReady, isolatedIds, hiddenIds, ghostIds, viewIsolateIds, geometryComplete])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -127,13 +150,13 @@ export const ViewerCanvas = memo(function ViewerCanvas({
       powerPreference: softwareGpu ? 'low-power' : 'high-performance',
       logarithmicDepthBuffer: false,
     })
-    const pixelRatio = softwareGpu ? 1 : Math.min(window.devicePixelRatio || 1, 1.25)
-    renderer.setPixelRatio(pixelRatio)
+    renderer.setPixelRatio(1)
     const colors = VIEWPORT_THEME[themeRef.current]
     renderer.setClearColor(colors.clear, 1)
     renderer.outputColorSpace = THREE.SRGBColorSpace
-    renderer.toneMapping = softwareGpu ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping
+    renderer.toneMapping = THREE.NoToneMapping
     renderer.toneMappingExposure = 1
+    renderer.sortObjects = false
 
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(colors.clear)
@@ -170,6 +193,9 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     const modelGroup = new THREE.Group()
     modelGroup.name = 'ifc-model'
     scene.add(modelGroup)
+    const batcher = new ViewerBatchGroup()
+    modelGroup.add(batcher.object)
+    batcherRef.current = batcher
     const overlayGroup = new THREE.Group()
     overlayGroup.name = 'qto-overlay'
     overlayGroup.renderOrder = 2
@@ -189,7 +215,6 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     sceneRef.current = scene
     appliedThemeRef.current = themeRef.current
     meshIndexRef.current = 0
-    meshById.current.clear()
 
     let frame = 0
     let dirty = true
@@ -226,13 +251,9 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     let hoverRaf = 0
     let lastHoverAt = 0
 
-    const setEmissive = (id: number | null, hex: number, intensity: number) => {
+    const setElementLook = (id: number | null, state: number) => {
       if (id == null) return
-      for (const mesh of meshById.current.get(id) ?? []) {
-        const material = mesh.material as THREE.MeshLambertMaterial
-        material.emissive.setHex(hex)
-        material.emissiveIntensity = intensity
-      }
+      batcher.setElementState(id, state)
       requestRender()
     }
 
@@ -252,31 +273,33 @@ export const ViewerCanvas = memo(function ViewerCanvas({
         -((clientY - rect.top) / rect.height) * 2 + 1,
       )
       raycaster.setFromCamera(pointer, camera)
-      const groups =
-        overlayGroup.children.length > 0
-          ? [overlayGroup.children, modelGroup.children]
-          : [modelGroup.children]
       const isolated = isolatedRef.current
       const hidden = hiddenRef.current
       const ghost = ghostRef.current
       const viewIsolate = viewIsolateRef.current
-      for (const pickFrom of groups) {
-        const hits = raycaster.intersectObjects(pickFrom, false)
-        const hit = hits.find((item) => {
+      const passes = (id: number) => {
+        if (hidden.has(id) || ghost.has(id)) return false
+        if (viewIsolate && !viewIsolate.has(id)) return false
+        if (isolated && !isolated.has(id)) return false
+        return true
+      }
+      if (overlayGroup.children.length > 0) {
+        const overlayHits = raycaster.intersectObjects(overlayGroup.children, false)
+        const overlayHit = overlayHits.find((item) => {
           const id = item.object.userData.expressId as number | undefined
-          if (id == null) return false
-          if (hidden.has(id) || ghost.has(id)) return false
-          if (viewIsolate && !viewIsolate.has(id)) return false
-          if (isolated && !isolated.has(id)) return false
-          return true
+          return id != null && passes(id)
         })
-        if (!hit) continue
-        const expressId = hit.object.userData.expressId as number | undefined
-        if (expressId == null) return null
-        const faceId = (hit.object.userData.faceId as string | undefined) ?? null
-        if (faceId) return { expressId, faceId }
-        // A native-mesh hit has no faceId - report the raw hit geometry so the
-        // caller can match it against on-demand face data (basket picking).
+        if (overlayHit) {
+          const expressId = overlayHit.object.userData.expressId as number
+          const faceId = (overlayHit.object.userData.faceId as string | undefined) ?? null
+          return { expressId, faceId }
+        }
+      }
+      const modelHits = raycaster.intersectObjects(batcher.drawMeshes, false)
+      for (const hit of modelHits) {
+        if (hit.faceIndex == null) continue
+        const expressId = batcher.expressIdAt(hit.object, hit.faceIndex)
+        if (expressId == null || !passes(expressId)) continue
         const point: [number, number, number] = [hit.point.x, hit.point.y, hit.point.z]
         const localNormal = hit.face?.normal
         let normal: [number, number, number] | undefined
@@ -308,6 +331,7 @@ export const ViewerCanvas = memo(function ViewerCanvas({
         return
       }
       if (hoverRaf) return
+      if (!geometryCompleteRef.current) return
       const now = performance.now()
       if (now - lastHoverAt < 80) return
       lastHoverAt = now
@@ -319,11 +343,11 @@ export const ViewerCanvas = memo(function ViewerCanvas({
         canvas.classList.toggle('hovering', id != null)
         if (id === hoveredRef.current) return
         if (hoveredRef.current != null && !selectedIdsRef.current.has(hoveredRef.current)) {
-          setEmissive(hoveredRef.current, 0x000000, 0)
+          setElementLook(hoveredRef.current, ELEMENT_SOLID)
         }
         hoveredRef.current = id
         if (id != null && !selectedIdsRef.current.has(id)) {
-          setEmissive(id, 0x007acc, 0.28)
+          setElementLook(id, ELEMENT_HOVER)
         }
         onHoverRef.current?.(id)
       })
@@ -336,7 +360,7 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     const onPointerLeave = () => {
       canvas.classList.remove('dragging', 'hovering')
       if (hoveredRef.current != null && !selectedIdsRef.current.has(hoveredRef.current)) {
-        setEmissive(hoveredRef.current, 0x000000, 0)
+        setElementLook(hoveredRef.current, ELEMENT_SOLID)
       }
       hoveredRef.current = null
       onHoverRef.current?.(null)
@@ -377,10 +401,11 @@ export const ViewerCanvas = memo(function ViewerCanvas({
       canvas.removeEventListener('click', onClick)
       canvas.removeEventListener('contextmenu', onContextMenu)
       controls.dispose()
+      batcher.dispose()
+      batcherRef.current = null
       renderer.dispose()
       scene.clear()
       meshIndexRef.current = 0
-      meshById.current.clear()
       overlayGroupRef.current = null
       basketGroupRef.current = null
     }
@@ -410,94 +435,62 @@ export const ViewerCanvas = memo(function ViewerCanvas({
   }, [theme])
 
   useEffect(() => {
-    const group = modelGroupRef.current
-    if (!group) return
+    const batcher = batcherRef.current
+    if (!batcher) return
 
-    if (meshes.length === 0) {
-      while (group.children.length) {
-        const child = group.children.pop()
-        if (child instanceof THREE.Mesh) {
-          child.geometry.dispose()
-          const material = child.material
-          if (Array.isArray(material)) material.forEach((item) => item.dispose())
-          else material.dispose()
-        }
-      }
+    const revision = geometry.revision()
+    if ((batcher.object.userData.revision as number | undefined) !== revision) {
+      batcher.clear()
       meshIndexRef.current = 0
-      meshById.current.clear()
+      batcher.object.userData.revision = revision
       requestRenderRef.current()
-      return
     }
 
-    if (group.children.length === 0) meshIndexRef.current = 0
+    if (!geometryComplete || meshes.length === 0) return
 
-    for (let i = meshIndexRef.current; i < meshes.length; i += 1) {
-      const threeMesh = meshDataToThree(meshes[i])
-      const material = threeMesh.material as THREE.MeshLambertMaterial
-      threeMesh.userData.baseOpacity = material.opacity
-      threeMesh.userData.baseTransparent = material.transparent
-      threeMesh.userData.baseDepthWrite = material.depthWrite
-      threeMesh.userData.baseColor = material.color.clone()
-      group.add(threeMesh)
-      const id = meshes[i].expressId
-      const list = meshById.current.get(id) ?? []
-      list.push(threeMesh)
-      meshById.current.set(id, list)
+    const budget = 120
+    const end = Math.min(meshes.length, meshIndexRef.current + budget)
+    if (end > meshIndexRef.current) {
+      batcher.addRange(meshes, meshIndexRef.current, end)
+      meshIndexRef.current = end
+      requestRenderRef.current()
     }
-    meshIndexRef.current = meshes.length
-    requestRenderRef.current()
-  }, [meshes])
+    if (end < meshes.length) {
+      const frame = requestAnimationFrame(() => setMeshPump((tick) => tick + 1))
+      return () => cancelAnimationFrame(frame)
+    }
+    onSceneReadyRef.current?.()
+  }, [meshes, meshPump, geometryComplete, geometry])
 
   useEffect(() => {
     isolatedRef.current = isolatedIds
     hiddenRef.current = hiddenIds
     ghostRef.current = ghostIds
     viewIsolateRef.current = viewIsolateIds
-    for (const meshesForId of meshById.current.values()) {
-      for (const mesh of meshesForId) {
-        const material = mesh.material as THREE.MeshLambertMaterial
-        const id = mesh.userData.expressId as number
-        const overlayOn = overlayIds != null && overlayIds.has(id)
-        const hidden = hiddenIds.has(id) || (viewIsolateIds != null && !viewIsolateIds.has(id))
-        const ghost = !hidden && (ghostIds.has(id) || overlayOn)
-        const dim = !hidden && !ghost && isolatedIds != null && !isolatedIds.has(id)
-        const fade = ghost || dim
-        const override = colorOverrides?.get(id)
-        const visKey = `${hidden ? 1 : 0}${ghost ? 1 : 0}${dim ? 1 : 0}${override ? override.join() : ''}`
-        if (mesh.userData.visKey === visKey) continue
-        mesh.userData.visKey = visKey
-        mesh.visible = !hidden
-        if (override) material.color.setRGB(override[0], override[1], override[2])
-        else if (mesh.userData.baseColor) material.color.copy(mesh.userData.baseColor)
-        material.opacity = fade ? 0.12 : override ? override[3] : (mesh.userData.baseOpacity as number | undefined) ?? 1
-        material.transparent = fade || Boolean(mesh.userData.baseTransparent) || Boolean(override && override[3] < 0.99)
-        material.depthWrite = fade ? false : Boolean(mesh.userData.baseDepthWrite ?? true)
-        material.needsUpdate = true
-      }
+    const batcher = batcherRef.current
+    if (!batcher) return
+    for (const id of geometry.ids()) {
+      const overlayOn = overlayIds != null && overlayIds.has(id)
+      const hidden = hiddenIds.has(id) || (viewIsolateIds != null && !viewIsolateIds.has(id))
+      const ghost = !hidden && (ghostIds.has(id) || overlayOn)
+      const dim = !hidden && !ghost && isolatedIds != null && !isolatedIds.has(id)
+      const selected = selectedIds.has(id) && !overlayOn
+      const hovered = hoveredRef.current === id && !selected
+      let state = ELEMENT_SOLID
+      if (hidden) state = ELEMENT_HIDDEN
+      else if (ghost || dim) state = ELEMENT_GHOST
+      else if (selected) state = ELEMENT_SELECTED
+      else if (hovered) state = ELEMENT_HOVER
+      batcher.setElementState(id, state)
+      const override = colorOverrides?.get(id)
+      batcher.setElementColor(id, override ? [override[0], override[1], override[2]] : null)
     }
     requestRenderRef.current()
-  }, [isolatedIds, hiddenIds, ghostIds, viewIsolateIds, meshes.length, overlayIds, selectedIds, colorOverrides])
+  }, [isolatedIds, hiddenIds, ghostIds, viewIsolateIds, overlayIds, colorOverrides, geometryComplete, geometry, selectedIds])
 
   useEffect(() => {
-    const previous = selectedIdsRef.current
-    for (const id of previous) {
-      if (selectedIds.has(id)) continue
-      for (const mesh of meshById.current.get(id) ?? []) {
-        const material = mesh.material as THREE.MeshLambertMaterial
-        material.emissive.setHex(0x000000)
-      }
-    }
-    for (const id of selectedIds) {
-      if (overlayIds?.has(id)) continue
-      for (const mesh of meshById.current.get(id) ?? []) {
-        const material = mesh.material as THREE.MeshLambertMaterial
-        material.emissive.setHex(0x007acc)
-        material.emissiveIntensity = 0.45
-      }
-    }
     selectedIdsRef.current = selectedIds
-    requestRenderRef.current()
-  }, [selectedIds, overlayIds])
+  }, [selectedIds])
 
   useEffect(() => {
     const group = overlayGroupRef.current
@@ -552,19 +545,19 @@ export const ViewerCanvas = memo(function ViewerCanvas({
   }, [basketFaces])
 
   useEffect(() => {
-    const group = modelGroupRef.current
+    const batcher = batcherRef.current
     const camera = cameraRef.current
     const controls = controlsRef.current
     const grid = gridRef.current
-    if (!group || !camera || !controls || group.children.length === 0) return
-    const fitted = applyCameraFit(camera, controls, group)
+    if (!batcher || !camera || !controls || batcher.box.isEmpty()) return
+    if (!geometryComplete && fitToken === 0) return
+    const fitted = applyCameraFitBox(camera, controls, batcher.box)
     if (!fitted || !grid) return
-    const box = new THREE.Box3().setFromObject(group)
-    grid.position.y = box.min.y
+    grid.position.y = batcher.box.min.y
     const scale = Math.max(fitted.maxDim * 2, 8) / 60
     grid.scale.setScalar(scale)
     requestRenderRef.current()
-  }, [fitToken, meshes.length])
+  }, [fitToken, geometryComplete])
 
   const basketTotals = useMemo(() => {
     if (!basketFaces || basketFaces.length === 0) return null
@@ -588,17 +581,26 @@ export const ViewerCanvas = memo(function ViewerCanvas({
         />
       ) : null}
       {basketTotals ? (
-        <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-md border border-border bg-card/95 px-3 py-2 text-[12px] shadow-lg backdrop-blur">
+        <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-md border border-border bg-card/95 px-3 py-2 text-[12px] shadow-lg backdrop-blur">
           <span className="font-medium">
             {basketTotals.count} face{basketTotals.count === 1 ? '' : 's'} selected
           </span>
           <span className="text-muted-foreground">
             gross {basketTotals.gross.toFixed(3)} m² · net {basketTotals.net.toFixed(3)} m²
           </span>
+          <input
+            type="text"
+            value={propertyName}
+            onChange={(event) => setPropertyName(event.target.value)}
+            placeholder="Property name"
+            aria-label="Property name"
+            className="h-7 w-36 rounded border border-border bg-background px-2 text-[11px] text-foreground"
+          />
           <button
             type="button"
-            className="rounded bg-primary px-2 py-1 text-[11px] font-semibold text-white hover:bg-primary/90"
-            onClick={onRegisterBasket}
+            className="rounded bg-primary px-2 py-1 text-[11px] font-semibold text-white hover:bg-primary/90 disabled:opacity-40"
+            disabled={!propertyName.trim()}
+            onClick={() => onRegisterBasket?.(propertyName)}
           >
             Register as property
           </button>

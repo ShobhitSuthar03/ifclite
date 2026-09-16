@@ -156,10 +156,6 @@ function TreeNode({
   const meta = spatialNodeMeta(node.type)
   const name = node.name || store?.entities.getName(node.expressId) || `#${node.expressId}`
 
-  const descendantIds = collectNodeElementIds(node)
-  const scoped =
-    descendantIds.length > 0 && descendantIds.every((id) => selectedIds.has(id))
-
   return (
     <div>
       <button
@@ -168,7 +164,7 @@ function TreeNode({
         style={{ paddingLeft: 8 + depth * 14 }}
         className={cn(
           'flex w-full items-center gap-1.5 rounded-[3px] py-[3px] pr-2 text-left text-[13px] hover:bg-accent',
-          (selectedIds.has(node.expressId) || scoped) && 'bg-primary/20 text-foreground',
+          selectedIds.has(node.expressId) && 'bg-primary/20 text-foreground',
         )}
         onClick={(event) => {
           if (hasChildren) onToggle(key)
@@ -259,18 +255,15 @@ function TypeGroup({
   onSelectScope?: (ids: number[], additive?: boolean) => void
 }) {
   const groupKey = `g:${parentId}:${group.typeName}`
-  const open =
-    expanded === 'all' || expanded.has(groupKey) || group.ids.some((id) => selectedIds.has(id))
+  const open = expanded === 'all' || expanded.has(groupKey)
+  const visibleIds = open ? group.ids.slice(0, 250) : []
 
   return (
     <div>
       <button
         type="button"
         style={{ paddingLeft: 8 + depth * 14 }}
-        className={cn(
-          'flex w-full items-center gap-1.5 rounded-[3px] py-[3px] pr-2 text-left text-[13px] text-muted-foreground hover:bg-accent',
-          group.ids.length > 0 && group.ids.every((id) => selectedIds.has(id)) && 'bg-primary/20 text-foreground',
-        )}
+        className="flex w-full items-center gap-1.5 rounded-[3px] py-[3px] pr-2 text-left text-[13px] text-muted-foreground hover:bg-accent"
         onClick={(event) => {
           if (expanded !== 'all' && !expanded.has(groupKey)) onToggle(groupKey)
           if (onSelectScope) onSelectScope(group.ids, isAdditiveModifier(event))
@@ -282,7 +275,7 @@ function TypeGroup({
         <span className="font-mono text-[10px]">{formatCount(group.ids.length)}</span>
       </button>
       {open &&
-        group.ids.map((id) => {
+        visibleIds.map((id) => {
           const label = store?.entities.getName(id) || `#${id}`
           return (
             <button
@@ -303,6 +296,14 @@ function TypeGroup({
             </button>
           )
         })}
+      {open && group.ids.length > 250 ? (
+        <p
+          style={{ paddingLeft: 8 + (depth + 1) * 14 }}
+          className="py-1 pr-2 text-[11px] text-muted-foreground"
+        >
+          Showing {formatCount(250)} of {formatCount(group.ids.length)}. Click the type to isolate all.
+        </p>
+      ) : null}
     </div>
   )
 }

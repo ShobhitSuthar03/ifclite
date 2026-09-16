@@ -59,13 +59,16 @@ export function all<T extends Record<string, SqlValue>>(
   params: SqlValue[] = [],
 ): T[] {
   const stmt = db.prepare(sql)
-  stmt.bind(params as BindParams)
-  const rows: T[] = []
-  while (stmt.step()) {
-    rows.push(stmt.getAsObject() as T)
+  try {
+    stmt.bind(params as BindParams)
+    const rows: T[] = []
+    while (stmt.step()) {
+      rows.push(stmt.getAsObject() as T)
+    }
+    return rows
+  } finally {
+    stmt.free()
   }
-  stmt.free()
-  return rows
 }
 
 export function scalar(db: Database, sql: string, params: SqlValue[] = []): SqlValue {

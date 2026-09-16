@@ -1,7 +1,22 @@
-import type { IfcQuery, QueryResultEntity } from '@ifc-lite/query'
+import type { IfcQuery } from '@ifc-lite/query'
 import { formatPropertyValue } from '@/lib/ifc-query'
+import {
+  ATTRIBUTE_IFC_TYPE,
+  ATTRIBUTE_NAME,
+  ATTRIBUTE_STOREY,
+  type PropertyRef,
+} from '@/lib/property-tree'
 
 export type BreakdownMode = 'type' | 'storey' | 'name' | 'external' | 'fire-rating'
+
+export type BreakdownRow = {
+  expressId: number
+  type: string
+  name: string
+  storeyId?: number | null
+  storeyName?: string | null
+  getProperty: (pset: string, name: string) => unknown
+}
 
 export type BreakdownGroup = {
   key: string
@@ -19,7 +34,7 @@ export const BREAKDOWN_OPTIONS: Array<{ value: BreakdownMode; label: string }> =
 ]
 
 export function buildBreakdown(
-  rows: QueryResultEntity[],
+  rows: BreakdownRow[],
   mode: BreakdownMode,
   query: IfcQuery | null,
 ): BreakdownGroup[] {
@@ -43,7 +58,7 @@ export function buildBreakdown(
 }
 
 function groupFor(
-  row: QueryResultEntity,
+  row: BreakdownRow,
   mode: BreakdownMode,
   query: IfcQuery | null,
 ): { key: string; label: string } {
@@ -56,8 +71,11 @@ function groupFor(
     }
     case 'storey': {
       const storey = query?.entity(row.expressId).storey()
-      const label = storey?.name || 'Unassigned'
-      return { key: storey ? `s:${storey.expressId}` : 'unassigned', label }
+      if (storey) return { key: `s:${storey.expressId}`, label: storey.name || 'Unassigned' }
+      if (row.storeyId != null) {
+        return { key: `s:${row.storeyId}`, label: row.storeyName || `Storey #${row.storeyId}` }
+      }
+      return { key: 'unassigned', label: row.storeyName || 'Unassigned' }
     }
     case 'external': {
       const value = row.getProperty('Pset_WallCommon', 'IsExternal')
@@ -70,4 +88,27 @@ function groupFor(
       return { key: `fr:${label}`, label }
     }
   }
+}
+
+export function propertyRefFromMode(mode: BreakdownMode): PropertyRef {
+  switch (mode) {
+    case 'storey':
+      return ATTRIBUTE_STOREY
+    case 'name':
+      return ATTRIBUTE_NAME
+    case 'external':
+      return { set: 'Pset_WallCommon', name: 'IsExternal', kind: 'property' }
+    case 'fire-rating':
+      return { set: 'Pset_WallCommon', name: 'FireRating', kind: 'property' }
+    default:
+      return ATTRIBUTE_IFC_TYPE
+  }
+}
+
+export function breakdownModeFromRef(ref: PropertyRef): BreakdownMode {
+  if (ref.kind === 'attribute' && ref.name === 'Storey') return 'storey'
+  if (ref.kind === 'attribute' && ref.name === 'Name') return 'name'
+  if (ref.name === 'IsExternal') return 'external'
+  if (ref.name === 'FireRating') return 'fire-rating'
+  return 'type'
 }

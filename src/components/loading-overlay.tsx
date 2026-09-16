@@ -5,28 +5,33 @@ type LoadingOverlayProps = {
   progress: LoadProgress | null
   parsing: boolean
   fileName?: string | null
+  surfaces?: boolean
 }
 
-export function LoadingOverlay({ progress, parsing, fileName }: LoadingOverlayProps) {
+export function LoadingOverlay({ progress, parsing, fileName, surfaces = false }: LoadingOverlayProps) {
   const processed = progress?.processed ?? 0
   const total = progress?.total ?? 0
   const ratio = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : progress ? 12 : 8
 
-  const title = progress?.cacheHit
-    ? 'Opening saved 3D'
-    : progress?.phase === 'init'
-      ? 'Starting the 3D engine'
-      : progress?.phase === 'cache-lookup'
-        ? 'Looking for a saved 3D cache'
-        : progress?.phase === 'geometry'
-          ? 'Building the 3D model'
-          : 'Opening IFC'
+  const title = surfaces
+    ? 'Calculating surfaces'
+    : progress?.cacheHit
+      ? 'Opening saved 3D'
+      : progress?.phase === 'init'
+        ? 'Starting the 3D engine'
+        : progress?.phase === 'cache-lookup'
+          ? 'Looking for a saved 3D cache'
+          : progress?.phase === 'geometry'
+            ? 'Building the 3D model'
+            : 'Opening IFC'
 
-  const detail = progress?.cacheHit
-    ? 'This file was processed before. Loading triangles from the project folder.'
-    : parsing && (progress?.phase === 'geometry' || progress?.phase === 'complete')
-      ? '3D is appearing. Property sets and the building tree are still being indexed.'
-      : 'The first open of a file is slower. The next open of the same file reuses the cache.'
+  const detail = surfaces
+    ? 'Measured once for this file, then reused when you reopen or select elements.'
+    : progress?.cacheHit
+      ? 'This file was processed before. Loading triangles from the project folder.'
+      : parsing && (progress?.phase === 'geometry' || progress?.phase === 'complete')
+        ? '3D is appearing. Property sets and the building tree are still being indexed.'
+        : 'The first open of a file is slower. The next open of the same file reuses the cache.'
 
   return (
     <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-background/80 px-6 text-center backdrop-blur-[2px]">

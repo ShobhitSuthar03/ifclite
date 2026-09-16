@@ -7,6 +7,7 @@ import { PropertiesPanel } from '@/components/properties-panel'
 import type { EntityData } from '@/lib/ifc-data'
 import type { AreaMetrics, QuantityResult } from '@/lib/geometry-qto'
 import type { ReportResult, ReportRow } from '@/lib/bim-sql'
+import type { TakeoffProgress } from '@/lib/takeoff-scope'
 
 export type RightTab = 'properties' | 'quantities' | 'export' | 'dashboard'
 
@@ -32,6 +33,15 @@ type RightDockProps = {
   selectedIds: Set<number>
   formwork: QuantityResult | null
   quantityBusy: boolean
+  takeoffProgress: TakeoffProgress | null
+  takeoffScopeIds: number[]
+  takeoffScopeLabel: string
+  takeoffMissing: number
+  takeoffStale: boolean
+  onCalculateTakeoff: () => void
+  onCancelTakeoff: () => void
+  onRecalculateTakeoff: () => void
+  onKeepTakeoff: () => void
   selectedFaceId?: string | null
   onSelectFace?: (faceId: string | null) => void
   onExported: (message: string) => void
@@ -66,6 +76,15 @@ export function RightDock({
   selectedIds,
   formwork,
   quantityBusy,
+  takeoffProgress,
+  takeoffScopeIds,
+  takeoffScopeLabel,
+  takeoffMissing,
+  takeoffStale,
+  onCalculateTakeoff,
+  onCancelTakeoff,
+  onRecalculateTakeoff,
+  onKeepTakeoff,
   selectedFaceId = null,
   onSelectFace,
   onExported,
@@ -112,10 +131,18 @@ export function RightDock({
           <FormworkPanel
             result={formwork}
             busy={quantityBusy}
+            progress={takeoffProgress}
             selectedIds={selectedIds}
-            isolatedIds={isolatedIds}
+            scopeIds={takeoffScopeIds}
+            scopeLabel={takeoffScopeLabel}
+            missingCount={takeoffMissing}
+            stale={takeoffStale}
             selectedFaceId={selectedFaceId}
             onSelectFace={onSelectFace}
+            onCalculate={onCalculateTakeoff}
+            onCancel={onCancelTakeoff}
+            onRecalculate={onRecalculateTakeoff}
+            onKeepPrevious={onKeepTakeoff}
           />
         ) : tab === 'dashboard' ? (
           <DashboardPanel

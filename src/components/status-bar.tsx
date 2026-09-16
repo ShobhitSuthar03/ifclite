@@ -16,11 +16,10 @@ type StatusBarProps = {
   exportMessage: string | null
   error: string | null
   quantitiesOpen: boolean
-  canCalculate: boolean
   quantityBusy: boolean
+  surfacesReady: boolean
   quantitySummary: string | null
   onOpenQuantities: () => void
-  onCalculateQuantities: () => void
 }
 
 function HoverLabel({
@@ -56,13 +55,12 @@ export function StatusBar({
   exportMessage,
   error,
   quantitiesOpen,
-  canCalculate,
   quantityBusy,
+  surfacesReady,
   quantitySummary,
   onOpenQuantities,
-  onCalculateQuantities,
 }: StatusBarProps) {
-  const processed = progress?.processed ?? result?.meshes.length ?? 0
+        const processed = progress?.processed ?? result?.totalMeshes ?? 0
   const total = progress?.total ?? result?.totalMeshes ?? 0
   const ratio = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0
 
@@ -82,8 +80,12 @@ export function StatusBar({
             {isolatedCount != null && <span>{formatCount(isolatedCount)} isolated</span>}
             {parsing ? <span>Still reading properties…</span> : null}
             {exportMessage && <span className="truncate">{exportMessage}</span>}
-            {quantitySummary && !quantityBusy ? (
+            {quantityBusy ? (
+              <span className="truncate text-foreground">{quantitySummary ?? 'Calculating surfaces…'}</span>
+            ) : quantitySummary ? (
               <span className="truncate text-foreground">{quantitySummary}</span>
+            ) : surfacesReady ? (
+              <span className="truncate">Surfaces ready</span>
             ) : null}
             <HoverLabel bindRef={hoverBindRef} lookupRef={hoverLookupRef} hidden={selectedId != null} />
           </>
@@ -120,15 +122,6 @@ export function StatusBar({
             >
               <Calculator className="h-3.5 w-3.5" />
               Quantities
-            </button>
-            <button
-              type="button"
-              className="h-7 rounded bg-primary px-2.5 text-[11px] font-medium text-primary-foreground disabled:opacity-40"
-              disabled={!canCalculate || quantityBusy}
-              title={canCalculate ? 'Measure the selected elements' : 'Click an element in 3D first'}
-              onClick={onCalculateQuantities}
-            >
-              {quantityBusy ? 'Calculating…' : 'Measure selection'}
             </button>
             <span>
               {formatCount(result.totalMeshes)} parts · {formatBytes(result.fileBytes)}

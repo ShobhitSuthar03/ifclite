@@ -5,11 +5,11 @@ import { LensPanel } from '@/components/lens-panel'
 import { ReportsPanel } from '@/components/reports-panel'
 import { PanelTabs } from '@/components/panel-tabs'
 import { SpatialTree } from '@/components/spatial-tree'
-import type { BreakdownGroup, BreakdownMode } from '@/lib/breakdown'
+import type { FilterOptions, GroupByField, MetricField, PropertyCatalogSet, ReportFilter, ReportTemplate } from '@/lib/bim-sql'
 import type { IfcDataStore, SpatialTreeNode } from '@/lib/ifc-data'
 import type { QuerySpec } from '@/lib/ifc-query'
-import type { Lens, LensEvaluationResult } from '@ifc-lite/lens'
-import type { FilterOptions, GroupByField, MetricField, ReportFilter, ReportTemplate } from '@/lib/bim-sql'
+import type { AutoColorSpec, Lens, LensEvaluationResult, LensOperator } from '@ifc-lite/lens'
+import type { PropertyRef, PropertyTreeNode } from '@/lib/property-tree'
 
 export type LeftTab = 'tree' | 'breakdown' | 'filters' | 'lens' | 'reports'
 
@@ -27,17 +27,39 @@ type LeftDockProps = {
   spec: QuerySpec
   matchCount: number | null
   filterError: string | null
+  filterReady: boolean
+  filterHint?: string | null
+  propertyCatalog: PropertyCatalogSet[]
   onSpecChange: (spec: QuerySpec) => void
-  groups: BreakdownGroup[]
-  breakdownMode: BreakdownMode
-  queryActive: boolean
-  selectedKey: string | null
-  onModeChange: (mode: BreakdownMode) => void
-  onSelectGroup: (group: BreakdownGroup) => void
-  onSelectId: (expressId: number, additive?: boolean) => void
+  filterProperty: PropertyRef | null
+  filterTree: PropertyTreeNode[]
+  filterNodeKey: string | null
+  onSelectFilterProperty: (ref: PropertyRef | null) => void
+  onSelectFilterValue: (node: PropertyTreeNode | null) => void
+  breakdownRules: PropertyRef[]
+  breakdownTree: PropertyTreeNode[]
+  breakdownNodeKey: string | null
+  breakdownColorize: boolean
+  onBreakdownRulesChange: (rules: PropertyRef[]) => void
+  onSelectBreakdownNode: (node: PropertyTreeNode | null) => void
+  onBreakdownColorizeChange: (colorize: boolean) => void
+  lenses: Lens[]
   lensId: string | null
   lensResult: LensEvaluationResult | null
+  lensLegend: Array<{ id: string; name: string; color: string; count: number }>
+  lensReady: boolean
+  lensHint?: string | null
   onLensSelect: (lens: Lens | null) => void
+  onCreateAutoColorLens: (spec: AutoColorSpec, name: string) => void
+  onCreatePropertyLens: (input: {
+    propertySet: string
+    propertyName: string
+    operator: LensOperator
+    propertyValue: string
+    color: string
+    kind: 'property' | 'quantity'
+  }) => void
+  onRemoveLens: (id: string) => void
   reportReady: boolean
   reportBusy: boolean
   reportTemplate: ReportTemplate
@@ -68,17 +90,32 @@ export function LeftDock({
   spec,
   matchCount,
   filterError,
+  filterReady,
+  filterHint,
+  propertyCatalog,
   onSpecChange,
-  groups,
-  breakdownMode,
-  queryActive,
-  selectedKey,
-  onModeChange,
-  onSelectGroup,
-  onSelectId,
+  filterProperty,
+  filterTree,
+  filterNodeKey,
+  onSelectFilterProperty,
+  onSelectFilterValue,
+  breakdownRules,
+  breakdownTree,
+  breakdownNodeKey,
+  breakdownColorize,
+  onBreakdownRulesChange,
+  onSelectBreakdownNode,
+  onBreakdownColorizeChange,
+  lenses,
   lensId,
   lensResult,
+  lensLegend,
+  lensReady,
+  lensHint,
   onLensSelect,
+  onCreateAutoColorLens,
+  onCreatePropertyLens,
+  onRemoveLens,
   reportReady,
   reportBusy,
   reportTemplate,
@@ -124,14 +161,16 @@ export function LeftDock({
           />
         ) : tab === 'breakdown' ? (
           <BreakdownPanel
-            groups={groups}
-            mode={breakdownMode}
-            active={queryActive}
-            selectedKey={selectedKey}
-            onModeChange={onModeChange}
-            onSelectGroup={onSelectGroup}
-            selectedIds={selectedIds}
-            onSelectId={onSelectId}
+            ready={filterReady}
+            hint={filterHint}
+            catalog={propertyCatalog}
+            rules={breakdownRules}
+            tree={breakdownTree}
+            selectedKey={breakdownNodeKey}
+            colorize={breakdownColorize}
+            onRulesChange={onBreakdownRulesChange}
+            onSelectNode={onSelectBreakdownNode}
+            onColorizeChange={onBreakdownColorizeChange}
           />
         ) : tab === 'reports' ? (
           <ReportsPanel
@@ -150,9 +189,35 @@ export function LeftDock({
             onFollowViewer={onFollowViewer}
           />
         ) : tab === 'lens' ? (
-          <LensPanel activeId={lensId} result={lensResult} disabled={!store} onSelect={onLensSelect} />
+          <LensPanel
+            lenses={lenses}
+            activeId={lensId}
+            result={lensResult}
+            legend={lensLegend}
+            catalog={propertyCatalog}
+            disabled={!lensReady}
+            hint={lensHint}
+            onSelect={onLensSelect}
+            onCreateAutoColor={onCreateAutoColorLens}
+            onCreatePropertyLens={onCreatePropertyLens}
+            onRemove={onRemoveLens}
+          />
         ) : (
-          <FilterBar store={store} spec={spec} matchCount={matchCount} error={filterError} onChange={onSpecChange} />
+          <FilterBar
+            ready={filterReady}
+            hint={filterHint}
+            spatialRoot={root}
+            catalog={propertyCatalog}
+            spec={spec}
+            selectedProperty={filterProperty}
+            valueTree={filterTree}
+            selectedKey={filterNodeKey}
+            matchCount={matchCount}
+            error={filterError}
+            onChange={onSpecChange}
+            onSelectProperty={onSelectFilterProperty}
+            onSelectValue={onSelectFilterValue}
+          />
         )}
       </div>
     </aside>

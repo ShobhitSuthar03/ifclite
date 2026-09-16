@@ -5,7 +5,8 @@ import {
   extractQuantitiesOnDemand,
   type IfcDataStore,
 } from '@ifc-lite/parser'
-import type { LensDataProvider } from '@ifc-lite/lens'
+import { discoverDataSources, type LensDataProvider } from '@ifc-lite/lens'
+import type { PropertyCatalogSet } from '@/lib/bim-sql'
 
 const SKIP_LENS_TYPES = new Set([
   'IfcProject',
@@ -93,4 +94,20 @@ export function createLensProvider(store: IfcDataStore): LensDataProvider {
       )
     },
   }
+}
+
+export function propertyCatalogFromLensProvider(provider: LensDataProvider): PropertyCatalogSet[] {
+  const discovered = discoverDataSources(provider, { properties: true, quantities: true })
+  const rows: PropertyCatalogSet[] = []
+  if (discovered.propertySets) {
+    for (const [set, names] of discovered.propertySets) {
+      rows.push({ set, names: [...names], kind: 'property' })
+    }
+  }
+  if (discovered.quantitySets) {
+    for (const [set, names] of discovered.quantitySets) {
+      rows.push({ set, names: [...names], kind: 'quantity' })
+    }
+  }
+  return rows.sort((left, right) => left.set.localeCompare(right.set))
 }

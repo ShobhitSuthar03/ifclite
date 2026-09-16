@@ -10,7 +10,14 @@ export function applyCameraFit(
   controls: OrbitControls,
   root: THREE.Object3D,
 ): { center: THREE.Vector3; maxDim: number } | null {
-  const box = new THREE.Box3().setFromObject(root)
+  return applyCameraFitBox(camera, controls, new THREE.Box3().setFromObject(root))
+}
+
+export function applyCameraFitBox(
+  camera: THREE.PerspectiveCamera,
+  controls: OrbitControls,
+  box: THREE.Box3,
+): { center: THREE.Vector3; maxDim: number } | null {
   if (box.isEmpty()) return null
   const center = box.getCenter(new THREE.Vector3())
   const size = box.getSize(new THREE.Vector3())
