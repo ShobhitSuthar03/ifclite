@@ -48,6 +48,7 @@ type RightDockProps = {
   onError: (message: string) => void
   report: ReportResult | null
   reportBusy: boolean
+  reportProgress?: { done: number; total: number } | null
   followViewer: boolean
   onReportRow: (row: ReportRow) => void
   onReportExport: (format: 'csv' | 'json' | 'xlsx') => void
@@ -91,6 +92,7 @@ export function RightDock({
   onError,
   report,
   reportBusy,
+  reportProgress,
   followViewer,
   onReportRow,
   onReportExport,
@@ -148,6 +150,7 @@ export function RightDock({
           <DashboardPanel
             result={report}
             busy={reportBusy}
+            progress={reportProgress}
             followViewer={followViewer}
             chartMetric={chartMetricOf(report)}
             onRowClick={onReportRow}

@@ -3,8 +3,6 @@ import { indexMeshAabbs, meshesForQuantityIndex } from '@/lib/geometry-qto/job'
 import type { ElementQuantity, QtoMesh, QuantityResult } from '@/lib/geometry-qto/types'
 
 const DEFAULT_CHUNK = 8
-const CHUNK_NEIGHBORS = 48
-const MAX_NEIGHBOR_TRIANGLES = 24_000
 
 function yieldMain(): Promise<void> {
   return new Promise((resolve) => {
@@ -48,7 +46,7 @@ export async function runWholeModelQuantities(
     if (options?.signal?.cancelled) break
     if (offset > 0) await yieldMain()
     const targetIds = new Set(ids.slice(offset, offset + chunkSize))
-    const subset = meshesForQuantityIndex(index, targetIds, CHUNK_NEIGHBORS, MAX_NEIGHBOR_TRIANGLES)
+    const subset = meshesForQuantityIndex(index, targetIds)
     try {
       const part = computeElementQuantities(subset, { targetIds, keepPositions: false })
       elements.push(...part.elements)

@@ -13,7 +13,7 @@ import type { ElementRecord } from '@/lib/bim-sql/types'
 import type { QuantityResult } from '@/lib/geometry-qto'
 
 const SKIP_TYPE =
-  /^(IfcRel|IfcProperty|IfcQuantity|IfcMaterial|IfcOwner|IfcPerson|IfcOrganization|IfcApplication|IfcCartesian|IfcDirection|IfcAxis|IfcLocalPlacement|IfcShape|IfcFace|IfcPoly|IfcColour|IfcPresentation|IfcGeometric|IfcSIUnit|IfcUnitAssignment|IfcConversion|IfcMeasure|IfcDimensional|IfcProject$|IfcSite$|IfcBuilding$|IfcBuildingStorey|IfcProductDefinitionShape|IfcStyled|IfcSurfaceStyle|IfcColourRgb)/i
+  /^(IfcRel|IfcProperty|IfcQuantity|IfcMaterial|IfcOwner|IfcPerson|IfcOrganization|IfcApplication|IfcCartesian|IfcDirection|IfcAxis|IfcLocalPlacement|IfcObjectPlacement|IfcGridPlacement|IfcShape|IfcFace|IfcPoly|IfcColour|IfcPresentation|IfcGeometric|IfcSIUnit|IfcUnitAssignment|IfcConversion|IfcMeasure|IfcDimensional|IfcProject$|IfcSite$|IfcBuilding$|IfcBuildingStorey|IfcProductDefinitionShape|IfcStyled|IfcSurfaceStyle|IfcColourRgb|IfcIndexed|IfcTriangulated|IfcTessellated|IfcBoolean|IfcExtruded|IfcRevolved|IfcSwept|IfcMappedItem|IfcRepresentation|IfcProfile|IfcClosedShell|IfcOpenShell|IfcConnectedFace|IfcAdvancedBrep|IfcVertex|IfcEdge|IfcLoop|IfcSolid|IfcCsg|IfcHalfSpace|IfcBoxedHalf|IfcSectioned|IfcArbitrary|IfcCompositeCurve|IfcTrimmed|IfcBSpline|IfcCircle$|IfcCircleProfile|IfcLine$|IfcPlane$|IfcPoint|IfcVector|IfcFillArea|IfcTexture|IfcImage|IfcBlob|IfcPixel|IfcCurveStyle|IfcDraughting|IfcTopology)/i
 
 const COST_KEYS = /^(costcode|cost_code|cost item|assemblycode|uniclass|classification|boq|boqitem)$/i
 const BOQ_KEYS = /^(boq|boqitem|billitem|assemblycode)$/i
@@ -66,108 +66,169 @@ function qtyByName(
   return hit?.value ?? 0
 }
 
-export function collectElementRecords(store: IfcDataStore): ElementRecord[] {
-  const query = createIfcQuery(store)
-  const rows: ElementRecord[] = []
+export const WAREHOUSE_INGEST_CHUNK = 32
+
+export function listWarehouseElementIds(store: IfcDataStore, productIds?: number[]): number[] {
+  const ids: number[] = []
   const seen = new Set<number>()
-  for (const ids of store.entityIndex.byType.values()) {
-    for (const expressId of ids) {
-      if (seen.has(expressId)) continue
-      seen.add(expressId)
+  const source = productIds ?? flattenEntityIds(store)
+  for (const expressId of source) {
+    if (seen.has(expressId)) continue
+    seen.add(expressId)
+    if (!productIds) {
       const ifcType = store.entities.getTypeName(expressId) || 'IfcProduct'
       if (!isWarehouseElementType(ifcType)) continue
-      try {
+    }
+    ids.push(expressId)
+  }
+  return ids
+}
 
-      const attrs = extractEntityAttributesOnDemand(store, expressId)
-      const psets = extractPropertiesOnDemand(store, expressId)
-      const qsets = extractQuantitiesOnDemand(store, expressId)
-      const materialInfo = extractMaterialsOnDemand(store, expressId)
-      const flatProps = psets.flatMap((set) =>
-        set.properties.map((property) => ({ pset: set.name, name: property.name, value: property.value })),
-      )
-      const flatQtys = qsets.flatMap((set) =>
-        set.quantities.map((quantity) => ({
-          qset: set.name,
-          name: quantity.name,
-          value: typeof quantity.value === 'number' ? quantity.value : Number(quantity.value) || 0,
-        })),
-      )
-
-      const volume = qtyByName(flatQtys, /^(netvolume|grossvolume|volume)$/i)
-      const area = qtyByName(flatQtys, /^(netsidearea|grossarea|netarea|area)$/i)
-      const length = qtyByName(flatQtys, /^(length|netlength)$/i)
-      const width = qtyByName(flatQtys, /^(width|thickness)$/i)
-      const height = qtyByName(flatQtys, /^(height)$/i)
-      const weight = qtyByName(flatQtys, /^(weight|netweight|grossweight)$/i) || volume * CONCRETE_DENSITY_KG_M3
-
-      const costProp = pickByName(flatProps, COST_VALUE_KEYS)
-      const unitFromProp = parseNumber(costProp)
-      const category = categoryOf(ifcType)
-      const unitCost = unitFromProp ?? CATEGORY_UNIT_RATES[ifcType] ?? CATEGORY_UNIT_RATES[category] ?? 150
-      const totalCost = unitFromProp != null && volume === 0 ? unitFromProp : unitCost * (volume || 1)
-      const targetRaw = parseNumber(pickByName(flatProps, TARGET_KEYS))
-      const targetCost = targetRaw ?? totalCost * TARGET_COST_FACTOR
-
-      const storey = (() => {
-        try {
-          return query.entity(expressId).storey()
-        } catch {
-          return null
-        }
-      })()
-      const material =
-        materialInfo?.name ||
-        materialInfo?.layers?.[0]?.materialName ||
-        materialInfo?.layers?.[0]?.name ||
-        materialInfo?.materials?.[0]?.name ||
-        ''
-
-      rows.push({
-        expressId,
-        globalId: attrs.globalId || '',
-        ifcType,
-        category,
-        name: attrs.name || store.entities.getName(expressId) || '',
-        description: attrs.description || '',
-        objectType: attrs.objectType || '',
-        tag: attrs.tag || '',
-        storeyId: storey?.expressId ?? null,
-        storeyName: storey?.name || 'Unassigned',
-        zoneName: '',
-        material: material || 'Unassigned',
-        costCode: pickByName(flatProps, COST_KEYS) || 'Unassigned',
-        boqItem: pickByName(flatProps, BOQ_KEYS) || pickByName(flatProps, COST_KEYS) || 'Unassigned',
-        phase: pickByName(flatProps, PHASE_KEYS) || 'Unassigned',
-        status: pickByName(flatProps, STATUS_KEYS) || 'Planned',
-        volume,
-        area,
-        length,
-        width,
-        height,
-        weight,
-        unitCost,
-        totalCost,
-        targetCost,
-        fireRating: pickByName(flatProps, FIRE_KEYS),
-        properties: flatProps.map((item) => ({
-          pset: item.pset,
-          name: item.name,
-          value: stringify(item.value),
-          numeric: parseNumber(item.value),
-        })),
-        quantities: flatQtys.map((item) => ({
-          qset: item.qset,
-          name: item.name,
-          value: item.value,
-          unit: '',
-        })),
-      })
-      } catch {
-        // Skip entities the on-demand extractors cannot read.
-      }
+function flattenEntityIds(store: IfcDataStore): number[] {
+  const ids: number[] = []
+  const seen = new Set<number>()
+  for (const group of store.entityIndex.byType.values()) {
+    for (const expressId of group) {
+      if (seen.has(expressId)) continue
+      seen.add(expressId)
+      ids.push(expressId)
     }
   }
+  return ids
+}
+
+function collectElementRecord(
+  store: IfcDataStore,
+  expressId: number,
+  query: ReturnType<typeof createIfcQuery>,
+): ElementRecord | null {
+  const ifcType = store.entities.getTypeName(expressId) || 'IfcProduct'
+  if (!isWarehouseElementType(ifcType)) return null
+  try {
+    const attrs = extractEntityAttributesOnDemand(store, expressId)
+    const psets = extractPropertiesOnDemand(store, expressId)
+    const qsets = extractQuantitiesOnDemand(store, expressId)
+    const materialInfo = extractMaterialsOnDemand(store, expressId)
+    const flatProps = psets.flatMap((set) =>
+      set.properties.map((property) => ({ pset: set.name, name: property.name, value: property.value })),
+    )
+    const flatQtys = qsets.flatMap((set) =>
+      set.quantities.map((quantity) => ({
+        qset: set.name,
+        name: quantity.name,
+        value: typeof quantity.value === 'number' ? quantity.value : Number(quantity.value) || 0,
+      })),
+    )
+
+    const volume = qtyByName(flatQtys, /^(netvolume|grossvolume|volume)$/i)
+    const area = qtyByName(flatQtys, /^(netsidearea|grossarea|netarea|area)$/i)
+    const length = qtyByName(flatQtys, /^(length|netlength)$/i)
+    const width = qtyByName(flatQtys, /^(width|thickness)$/i)
+    const height = qtyByName(flatQtys, /^(height)$/i)
+    const weight = qtyByName(flatQtys, /^(weight|netweight|grossweight)$/i) || volume * CONCRETE_DENSITY_KG_M3
+
+    const costProp = pickByName(flatProps, COST_VALUE_KEYS)
+    const unitFromProp = parseNumber(costProp)
+    const category = categoryOf(ifcType)
+    const unitCost = unitFromProp ?? CATEGORY_UNIT_RATES[ifcType] ?? CATEGORY_UNIT_RATES[category] ?? 150
+    const totalCost = unitFromProp != null && volume === 0 ? unitFromProp : unitCost * (volume || 1)
+    const targetRaw = parseNumber(pickByName(flatProps, TARGET_KEYS))
+    const targetCost = targetRaw ?? totalCost * TARGET_COST_FACTOR
+
+    const storey = (() => {
+      try {
+        return query.entity(expressId).storey()
+      } catch {
+        return null
+      }
+    })()
+    const material =
+      materialInfo?.name ||
+      materialInfo?.layers?.[0]?.materialName ||
+      materialInfo?.layers?.[0]?.name ||
+      materialInfo?.materials?.[0]?.name ||
+      ''
+
+    return {
+      expressId,
+      globalId: attrs.globalId || '',
+      ifcType,
+      category,
+      name: attrs.name || store.entities.getName(expressId) || '',
+      description: attrs.description || '',
+      objectType: attrs.objectType || '',
+      tag: attrs.tag || '',
+      storeyId: storey?.expressId ?? null,
+      storeyName: storey?.name || 'Unassigned',
+      zoneName: '',
+      material: material || 'Unassigned',
+      costCode: pickByName(flatProps, COST_KEYS) || 'Unassigned',
+      boqItem: pickByName(flatProps, BOQ_KEYS) || pickByName(flatProps, COST_KEYS) || 'Unassigned',
+      phase: pickByName(flatProps, PHASE_KEYS) || 'Unassigned',
+      status: pickByName(flatProps, STATUS_KEYS) || 'Planned',
+      volume,
+      area,
+      length,
+      width,
+      height,
+      weight,
+      unitCost,
+      totalCost,
+      targetCost,
+      fireRating: pickByName(flatProps, FIRE_KEYS),
+      properties: flatProps.map((item) => ({
+        pset: item.pset,
+        name: item.name,
+        value: stringify(item.value),
+        numeric: parseNumber(item.value),
+      })),
+      quantities: flatQtys.map((item) => ({
+        qset: item.qset,
+        name: item.name,
+        value: item.value,
+        unit: '',
+      })),
+    }
+  } catch {
+    return null
+  }
+}
+
+export function collectElementRecordsRange(
+  store: IfcDataStore,
+  ids: number[],
+  start: number,
+  end: number,
+  query: ReturnType<typeof createIfcQuery>,
+): ElementRecord[] {
+  const rows: ElementRecord[] = []
+  const last = Math.min(end, ids.length)
+  for (let index = start; index < last; index += 1) {
+    const row = collectElementRecord(store, ids[index], query)
+    if (row) rows.push(row)
+  }
   return rows
+}
+
+export function collectElementRecords(store: IfcDataStore): ElementRecord[] {
+  const query = createIfcQuery(store)
+  return collectElementRecordsRange(store, listWarehouseElementIds(store), 0, Number.POSITIVE_INFINITY, query)
+}
+
+export function startWarehouseIngest(
+  db: Database,
+  spatialRoot: SpatialTreeNode | null,
+  fileName: string,
+  versionId: string,
+): number {
+  run(db, 'INSERT INTO models (name, version_id, loaded_at) VALUES (?, ?, ?)', [
+    fileName,
+    versionId,
+    new Date().toISOString(),
+  ])
+  const modelId = Number(all<{ id: number }>(db, 'SELECT last_insert_rowid() AS id')[0]?.id ?? 1)
+  if (spatialRoot) insertSpatial(db, modelId, spatialRoot, null)
+  return modelId
 }
 
 function insertSpatial(db: Database, modelId: number, node: SpatialTreeNode, parent: number | null) {
@@ -181,6 +242,7 @@ function insertSpatial(db: Database, modelId: number, node: SpatialTreeNode, par
 }
 
 export function insertElementRecords(db: Database, modelId: number, records: ElementRecord[]) {
+  if (records.length === 0) return
   const elementStmt = db.prepare(
     `INSERT INTO elements (
       id, model_id, express_id, global_id, ifc_type, category, name, description, object_type, tag,
@@ -257,13 +319,7 @@ export function ingestWarehouse(
   fileName: string,
   versionId: string,
 ) {
-  run(db, 'INSERT INTO models (name, version_id, loaded_at) VALUES (?, ?, ?)', [
-    fileName,
-    versionId,
-    new Date().toISOString(),
-  ])
-  const modelId = Number(all<{ id: number }>(db, 'SELECT last_insert_rowid() AS id')[0]?.id ?? 1)
-  if (spatialRoot) insertSpatial(db, modelId, spatialRoot, null)
+  const modelId = startWarehouseIngest(db, spatialRoot, fileName, versionId)
   insertElementRecords(db, modelId, collectElementRecords(store))
   return modelId
 }

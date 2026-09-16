@@ -5,6 +5,7 @@ import {
   type IfcDataStore,
 } from '@ifc-lite/parser'
 import { createIfcQuery } from '@/lib/ifc-query'
+import { overlayLabel, type PropertyOverlay } from '@/lib/mutation-overlay'
 import { exactValueLabel, nestByValues, type PropertyRef, type PropertyTreeNode } from '@/lib/property-tree'
 
 export const STORE_PROPERTY_CHUNK = 64
@@ -16,12 +17,14 @@ export function labelStorePropertyChunk(
   from: number,
   to: number,
   labels: Map<number, string>,
+  overlay?: PropertyOverlay,
 ) {
   const query = ref.kind === 'attribute' && ref.name === 'Storey' ? createIfcQuery(store) : null
   const end = Math.min(to, ids.length)
   for (let i = from; i < end; i += 1) {
     const id = ids[i]
-    labels.set(id, storeValueLabel(store, ref, id, query))
+    const edited = overlayLabel(overlay, ref, id)
+    labels.set(id, edited !== undefined ? exactValueLabel(edited, null) : storeValueLabel(store, ref, id, query))
   }
 }
 

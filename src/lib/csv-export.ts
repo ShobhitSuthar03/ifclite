@@ -13,7 +13,7 @@ export const CSV_MODES: Array<{ value: CsvMode; label: string; hint: string }> =
   { value: 'properties', label: 'Properties', hint: 'One row per property value' },
   { value: 'quantities', label: 'Quantities', hint: 'One row per quantity value' },
   { value: 'spatial', label: 'Spatial', hint: 'Project → site → building → storey' },
-  { value: 'areas', label: 'Geometry areas', hint: 'AREAMAX, LATERALAREA, UNCOVEREDAREA, … per building element' },
+  { value: 'areas', label: 'Geometry areas', hint: 'AREAMAX, LATERALAREA, GROSSAREA, … per building element' },
   { value: 'formwork', label: 'Geometry faces', hint: 'One row per extracted face (gross / covered / net)' },
 ]
 
@@ -232,10 +232,6 @@ export function exportAreasCsv(
     'LATERALAREA',
     'UNDERAREA',
     'TOPAREA',
-    'UNCOVEREDAREA',
-    'NETAREA',
-    'COVEREDAREA',
-    'CONTACTAREA',
     'CROSSAREA',
     'SECTIONAREA',
     'GROSSAREA',
@@ -257,10 +253,6 @@ export function exportAreasCsv(
       m.LATERALAREA.toFixed(3),
       m.UNDERAREA.toFixed(3),
       m.TOPAREA.toFixed(3),
-      m.UNCOVEREDAREA.toFixed(3),
-      m.UNCOVEREDAREA.toFixed(3),
-      m.COVEREDAREA.toFixed(3),
-      m.COVEREDAREA.toFixed(3),
       m.CROSSAREA.toFixed(3),
       m.CROSSAREA.toFixed(3),
       m.GROSSAREA.toFixed(3),
@@ -296,9 +288,6 @@ export function exportFormworkCsv(
     'ny',
     'nz',
     'grossArea',
-    'overlapArea',
-    'netArea',
-    'overlappingIds',
   ]
   const rows: string[][] = [header]
   for (const element of filtered.elements) {
@@ -312,9 +301,6 @@ export function exportFormworkCsv(
         face.normal[1].toFixed(4),
         face.normal[2].toFixed(4),
         face.grossArea.toFixed(3),
-        face.overlapArea.toFixed(3),
-        face.netArea.toFixed(3),
-        face.overlappingIds.join('|'),
       ])
     }
   }

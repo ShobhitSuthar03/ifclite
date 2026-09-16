@@ -29,7 +29,6 @@ import {
   type LoadResult,
   type LoadSource,
 } from '@/lib/ifc-loader'
-import { propertyRefFromMode, breakdownModeFromRef, type BreakdownMode } from '@/lib/breakdown'
 import {
   computeElementQuantities,
   encodeStoredQuantities,
@@ -48,6 +47,7 @@ import {
   executeQuery,
   isQueryActive,
   queryIds,
+  createIfcQuery,
   type QuerySpec,
 } from '@/lib/ifc-query'
 import { usePanelWidths } from '@/lib/panel-layout'
@@ -60,27 +60,33 @@ import {
 } from '@/lib/view-visibility'
 import { intersectIds } from '@/lib/spatial-scope'
 import { createLensProvider, propertyCatalogFromLensProvider } from '@/lib/lens-provider'
-import { createWarehouseLensProvider } from '@/lib/warehouse-lens-provider'
-import { createAutoColorLens, createPropertyColorLens, evaluateActiveLens } from '@/lib/user-lens'
 import {
-  ATTRIBUTE_IFC_TYPE,
   colorizeLeaves,
   colorMapFromTree,
+  isIfcTypeRef,
+  nestByValues,
   type PropertyRef,
   type PropertyTreeNode,
   propertyRefKey,
+  toggleFilterKeys,
+  unionPropertyNodeIds,
 } from '@/lib/property-tree'
 import { missingTakeoffIds, resolveTakeoffTarget, TAKEOFF_CHUNK, type TakeoffProgress } from '@/lib/takeoff-scope'
+import { overlayAttributeKey, overlayFromPatches } from '@/lib/mutation-overlay'
 import { createMutationView, createWarehouseMutationView, overlayEntityData } from '@/lib/mutation-view'
 import { recycleCsvProcessor } from '@/lib/csv-export'
-import { BUILTIN_LENSES, type AutoColorSpec, type Lens, type LensOperator } from '@ifc-lite/lens'
 import {
   EMPTY_REPORT_FILTER,
   applyGeometryQuantities,
   closeBimDatabase,
   downloadTextFile,
   exportBimDatabase,
-  ingestWarehouse,
+  insertElementRecords,
+  collectElementRecordsRange,
+  listWarehouseElementIds,
+  startWarehouseIngest,
+  applyMutationPatchesToWarehouse,
+  WAREHOUSE_INGEST_CHUNK,
   loadFilterOptions,
   openBimDatabase,
   openBimDatabaseFromBytes,
@@ -132,9 +138,10 @@ import {
   type MutationPatch,
   type ProjectSession,
 } from '@/lib/project-session'
+import { createSavedView, replaceSavedViewIds, viewFileStem, type SavedView } from '@/lib/saved-views'
 import { createViewerMeshStore } from '@/lib/viewer-meshes'
-import { isGeometryFallbackTree, typeTreeFromMeshes, uniqueIfcTypeTree } from '@/lib/geometry-tree'
-import { labelStorePropertyChunk, treeFromLabeledIds, STORE_PROPERTY_CHUNK } from '@/lib/store-property-tree'
+import { typeTreeFromMeshes, uniqueIfcTypeTree } from '@/lib/geometry-tree'
+import { labelStorePropertyChunk, STORE_PROPERTY_CHUNK } from '@/lib/store-property-tree'
 
 type MobileTab = LeftTab | RightTab
 
@@ -225,20 +232,19 @@ export default function App() {
   const [spatialRoot, setSpatialRoot] = useState<SpatialTreeNode | null>(null)
   const [mobileTab, setMobileTab] = useState<MobileTab>('tree')
   const [spec, setSpec] = useState<QuerySpec>(EMPTY_QUERY)
-  const [breakdownMode, setBreakdownMode] = useState<BreakdownMode>('type')
-  const [breakdownRules, setBreakdownRules] = useState<PropertyRef[]>([ATTRIBUTE_IFC_TYPE])
-  const [breakdownColorize, setBreakdownColorize] = useState(false)
-  const [breakdownNodeKey, setBreakdownNodeKey] = useState<string | null>(null)
-  const [breakdownNodeIds, setBreakdownNodeIds] = useState<Set<number> | null>(null)
-  const [filterProperty, setFilterProperty] = useState<PropertyRef | null>(null)
-  const [filterNodeKey, setFilterNodeKey] = useState<string | null>(null)
+  const [filterRules, setFilterRules] = useState<PropertyRef[]>([])
+  const [filterNodeKeys, setFilterNodeKeys] = useState<string[]>([])
   const [filterNodeIds, setFilterNodeIds] = useState<Set<number> | null>(null)
+  const [filterColorize, setFilterColorize] = useState(false)
   const [storeFilterTree, setStoreFilterTree] = useState<PropertyTreeNode[]>([])
   const [leftTab, setLeftTab] = useState<LeftTab>('tree')
   const [rightTab, setRightTab] = useState<RightTab>('properties')
   const [sourceBytes, setSourceBytes] = useState<Uint8Array | null>(null)
   const [exportMessage, setExportMessage] = useState<string | null>(null)
   const [ifcExportBusy, setIfcExportBusy] = useState(false)
+  const [savedViews, setSavedViews] = useState<SavedView[]>([])
+  const [activeViewId, setActiveViewId] = useState<string | null>(null)
+  const [exportingViewId, setExportingViewId] = useState<string | null>(null)
   const [engineStatus, setEngineStatus] = useState<GeometryEngineStatus>(getGeometryEngineStatus)
   const [quantities, setQuantities] = useState<QuantityResult | null>(null)
   const [quantityBusy, setQuantityBusy] = useState(false)
@@ -254,12 +260,13 @@ export default function App() {
   const [focusIds, setFocusIds] = useState<Set<number>>(() => new Set())
   const [hiddenIds, setHiddenIds] = useState<Set<number>>(() => new Set())
   const [treeScopeIds, setTreeScopeIds] = useState<Set<number> | null>(null)
-  const [activeLens, setActiveLens] = useState<Lens | null>(null)
-  const [userLenses, setUserLenses] = useState<Lens[]>([])
   const [parseTick, setParseTick] = useState(0)
   const [mutationTick, setMutationTick] = useState(0)
   const [warehouse, setWarehouse] = useState<BimDatabase | null>(null)
   const [warehouseBusy, setWarehouseBusy] = useState(false)
+  const [warehouseRequested, setWarehouseRequested] = useState(false)
+  const [warehouseProgress, setWarehouseProgress] = useState<{ done: number; total: number } | null>(null)
+  const [warehouseEpoch, setWarehouseEpoch] = useState(0)
   const [reportTemplate, setReportTemplate] = useState<ReportTemplate>('qto')
   const [reportGroupBy, setReportGroupBy] = useState<GroupByField>('category')
   const [reportMetrics, setReportMetrics] = useState<MetricField[]>(['count', 'volume', 'area', 'cost'])
@@ -281,6 +288,7 @@ export default function App() {
   const facePositionCache = useRef<Map<number, ElementQuantity>>(new Map())
   const lastLoadSource = useRef<LoadSource | null>(null)
   const warehouseRestored = useRef(false)
+  const warehouseBuild = useRef(false)
   const takeoffGen = useRef(0)
   const quantitiesRef = useRef<QuantityResult | null>(null)
   const rowRef = useRef<HTMLDivElement>(null)
@@ -288,6 +296,8 @@ export default function App() {
   const rightPaneRef = useRef<HTMLDivElement>(null)
   const hoverBindRef = useRef<((id: number | null) => void) | null>(null)
   const hoverLookupRef = useRef<(id: number) => string>(() => '')
+  const mutationPatchesRef = useRef<MutationPatch[]>([])
+  mutationPatchesRef.current = mutationPatches
   const { leftWidth, rightWidth, dragLeft, dragRight, commitLeft, commitRight, resetLeft, resetRight } =
     usePanelWidths()
   const { theme } = useTheme()
@@ -297,20 +307,42 @@ export default function App() {
   const applySession = useCallback((session: ProjectSession) => {
     setDisplayMode('all')
     setRightTab(session.rightTab === 'quantities' ? 'properties' : session.rightTab)
-    setBreakdownMode(session.breakdownMode)
-    setBreakdownRules([propertyRefFromMode(session.breakdownMode)])
-    setBreakdownNodeKey(null)
-    setBreakdownNodeIds(null)
-    setFilterProperty(null)
-    setFilterNodeKey(null)
+    setFilterRules(session.filterRules)
+    setFilterNodeKeys([])
     setFilterNodeIds(null)
+    setFilterColorize(false)
     setReportTemplate(session.reportTemplate)
     setReportGroupBy(session.reportGroupBy)
     setReportMetrics(session.reportMetrics)
     setReportFilter(session.reportFilter)
     setFollowViewer(session.followViewer)
     setMutationPatches(session.mutations)
+    setSavedViews(session.savedViews ?? [])
+    setActiveViewId(null)
   }, [])
+
+  const persistWarehouse = useCallback((db: BimDatabase) => {
+    if (!projectsAvailable() || !project) return
+    window.setTimeout(() => {
+      try {
+        void saveProjectWarehouse(exportBimDatabase(db))
+      } catch (caught) {
+        console.warn('Could not save warehouse.sqlite', caught)
+      }
+    }, 0)
+  }, [project])
+
+  const publishMutations = useCallback(
+    (next: MutationPatch[]) => {
+      setMutationPatches(next)
+      setMutationTick((tick) => tick + 1)
+      if (!warehouse) return
+      applyMutationPatchesToWarehouse(warehouse, next)
+      setReportTick((tick) => tick + 1)
+      persistWarehouse(warehouse)
+    },
+    [warehouse, persistWarehouse],
+  )
 
   const rememberSnapshot = useCallback(async (snapshot: ProjectSnapshot, restoreSession = true) => {
     setProject(snapshot)
@@ -322,100 +354,175 @@ export default function App() {
       .catch(() => undefined)
   }, [])
 
+  // Restore warehouse.sqlite after 3D is on screen. Do not wait for a dock tab —
+  // that file already has the property index from the last session.
   useEffect(() => {
     if (busy || !result || !sceneReady) return
-    const wantsWarehouse =
-      leftTab === 'filters' ||
-      leftTab === 'lens' ||
-      leftTab === 'breakdown' ||
-      leftTab === 'reports' ||
-      mobileTab === 'filters' ||
-      mobileTab === 'lens' ||
-      mobileTab === 'breakdown' ||
-      mobileTab === 'reports'
-    if (!wantsWarehouse) return
-    const restoring = pendingWarehouseRestore.current && !warehouseRestored.current
-    const reportsOpen =
-      leftTab === 'reports' ||
-      mobileTab === 'reports' ||
-      rightTab === 'dashboard' ||
-      mobileTab === 'dashboard'
-    if (!restoring && (!reportsOpen || !store || parsing)) return
+    if (!pendingWarehouseRestore.current || warehouseRestored.current) return
     let cancelled = false
-    setWarehouseBusy(true)
-    void (async () => {
-      try {
-        let db: BimDatabase
-        if (pendingWarehouseRestore.current) {
+    const timer = window.setTimeout(() => {
+      if (cancelled || !pendingWarehouseRestore.current || warehouseRestored.current) return
+      setWarehouseBusy(true)
+      void (async () => {
+        try {
           const bytes = await getProjectWarehouse()
           if (cancelled) return
-          pendingWarehouseRestore.current = false
           if (!bytes) {
-            if (!cancelled) setWarehouseBusy(false)
+            pendingWarehouseRestore.current = false
+            setWarehouseEpoch((tick) => tick + 1)
             return
           }
           try {
-            db = await openBimDatabaseFromBytes(bytes)
-            warehouseRestored.current = true
-            if (isGeometryFallbackTree(spatialRoot) || !spatialRoot) {
-              const tree = spatialTreeFromWarehouse(db)
-              if (!cancelled && tree) setSpatialRoot(tree)
+            const db = await openBimDatabaseFromBytes(bytes)
+            if (cancelled) {
+              closeBimDatabase(db)
+              return
             }
+            warehouseRestored.current = true
+            pendingWarehouseRestore.current = false
+            applyMutationPatchesToWarehouse(db, mutationPatchesRef.current)
+            setWarehouse((current) => {
+              closeBimDatabase(current)
+              return db
+            })
+            const tree = spatialTreeFromWarehouse(db)
+            if (tree) setSpatialRoot(tree)
+            setReportTick((tick) => tick + 1)
           } catch (caught) {
             console.warn('Saved warehouse.sqlite was unreadable; rebuilding', caught)
             warehouseRestored.current = false
-            if (!store) {
-              if (!cancelled) setWarehouseBusy(false)
-              return
-            }
-            db = await openBimDatabase()
-            ingestWarehouse(db, store, spatialRoot, result.fileName, result.cacheKey)
+            pendingWarehouseRestore.current = false
+            setWarehouseEpoch((tick) => tick + 1)
           }
-        } else if (warehouseRestored.current) {
+        } catch (caught) {
+          if (!cancelled) {
+            pendingWarehouseRestore.current = false
+            setWarehouseEpoch((tick) => tick + 1)
+            console.warn('Could not restore warehouse.sqlite', caught)
+          }
+        } finally {
           if (!cancelled) setWarehouseBusy(false)
-          return
-        } else if (store) {
-          db = await openBimDatabase()
-          ingestWarehouse(db, store, spatialRoot, result.fileName, result.cacheKey)
-        } else {
-          if (!cancelled) setWarehouseBusy(false)
-          return
         }
+      })()
+    }, 250)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [busy, sceneReady, result])
+
+  useEffect(() => {
+    if (!warehouseRequested || warehouse || busy || !result || !sceneReady) return
+    if (pendingWarehouseRestore.current || warehouseRestored.current) return
+    if (!store || parsing || warehouseBuild.current) return
+    warehouseBuild.current = true
+    let cancelled = false
+    let frame = 0
+    setWarehouseBusy(true)
+    setWarehouseProgress({ done: 0, total: 0 })
+    void (async () => {
+      try {
+        const db = await openBimDatabase()
         if (cancelled) {
           closeBimDatabase(db)
           return
         }
-        setWarehouse((current) => {
-          closeBimDatabase(current)
-          return db
+        const ids = listWarehouseElementIds(store, geometryStore.ids())
+        const query = createIfcQuery(store)
+        setWarehouseProgress({ done: 0, total: ids.length })
+        await new Promise<void>((resolve) => {
+          frame = requestAnimationFrame(() => resolve())
         })
-        setReportTick((tick) => tick + 1)
-        if (projectsAvailable() && project && store) {
+        if (cancelled) {
+          closeBimDatabase(db)
+          return
+        }
+        const modelId = startWarehouseIngest(db, spatialRoot, result.fileName, result.cacheKey)
+        if (cancelled) {
+          closeBimDatabase(db)
+          return
+        }
+        let index = 0
+        const pump = () => {
+          if (cancelled) {
+            closeBimDatabase(db)
+            return
+          }
           try {
-            await saveProjectWarehouse(exportBimDatabase(db))
+            const end = Math.min(index + WAREHOUSE_INGEST_CHUNK, ids.length)
+            insertElementRecords(db, modelId, collectElementRecordsRange(store, ids, index, end, query))
+            index = end
+            setWarehouseProgress({ done: index, total: ids.length })
+            if (index < ids.length) {
+              frame = requestAnimationFrame(pump)
+              return
+            }
+            applyMutationPatchesToWarehouse(db, mutationPatchesRef.current)
+            setWarehouse((current) => {
+              closeBimDatabase(current)
+              return db
+            })
+            setReportTick((tick) => tick + 1)
+            setWarehouseBusy(false)
+            setWarehouseProgress(null)
+            warehouseBuild.current = false
+            if (projectsAvailable() && project) {
+              window.setTimeout(() => {
+                try {
+                  void saveProjectWarehouse(exportBimDatabase(db))
+                } catch (caught) {
+                  console.warn('Could not save warehouse.sqlite', caught)
+                }
+              }, 0)
+            }
           } catch (caught) {
-            console.warn('Could not save warehouse.sqlite', caught)
+            warehouseBuild.current = false
+            closeBimDatabase(db)
+            if (!cancelled) {
+              setWarehouseBusy(false)
+              setWarehouseProgress(null)
+              setWarehouseRequested(false)
+              console.warn('BIM warehouse ingest failed', caught)
+              setError(caught instanceof Error ? caught.message : String(caught))
+            }
           }
         }
+        frame = requestAnimationFrame(pump)
       } catch (caught) {
+        warehouseBuild.current = false
         if (!cancelled) {
+          setWarehouseBusy(false)
+          setWarehouseProgress(null)
+          setWarehouseRequested(false)
           console.warn('BIM warehouse ingest failed', caught)
           setError(caught instanceof Error ? caught.message : String(caught))
         }
-      } finally {
-        if (!cancelled) setWarehouseBusy(false)
       }
     })()
     return () => {
       cancelled = true
+      cancelAnimationFrame(frame)
+      warehouseBuild.current = false
     }
-  }, [busy, sceneReady, store, spatialRoot, result, project, parsing, leftTab, mobileTab, rightTab])
+  }, [
+    warehouseRequested,
+    warehouse,
+    warehouseEpoch,
+    busy,
+    sceneReady,
+    store,
+    spatialRoot,
+    result,
+    project,
+    parsing,
+    geometryStore,
+  ])
 
   useEffect(() => {
-    if (busy || !sceneReady || !warehouse || !quantities) return
+    if (!warehouseRequested || busy || !sceneReady || !warehouse || !quantities) return
     applyGeometryQuantities(warehouse, quantities)
     setReportTick((tick) => tick + 1)
-  }, [busy, sceneReady, warehouse, quantities])
+  }, [warehouseRequested, busy, sceneReady, warehouse, quantities])
 
   const load = useCallback(async (source: LoadSource) => {
     const gen = loadGen.current + 1
@@ -427,6 +534,10 @@ export default function App() {
     setLoadingName(source.name)
     pendingParse.current = false
     setParsing(false)
+    setWarehouseBusy(false)
+    setWarehouseRequested(false)
+    setWarehouseProgress(null)
+    warehouseBuild.current = false
     setError(null)
     setSelectedId(null)
     setSelectedIds(new Set())
@@ -453,8 +564,6 @@ export default function App() {
     setFocusIds(new Set())
     setHiddenIds(new Set())
     setTreeScopeIds(null)
-    setActiveLens(null)
-    setUserLenses([])
     setMutationTick(0)
     setMutationPatches([])
     warehouseRestored.current = false
@@ -467,15 +576,14 @@ export default function App() {
     void recycleCsvProcessor()
     hoverBindRef.current?.(null)
     setSpec(EMPTY_QUERY)
-    setBreakdownMode('type')
-    setBreakdownRules([ATTRIBUTE_IFC_TYPE])
-    setBreakdownColorize(false)
-    setBreakdownNodeKey(null)
-    setBreakdownNodeIds(null)
-    setFilterProperty(null)
-    setFilterNodeKey(null)
+    setFilterRules([])
+    setFilterColorize(false)
+    setFilterNodeKeys([])
     setFilterNodeIds(null)
     setStoreFilterTree([])
+    setSavedViews([])
+    setActiveViewId(null)
+    setExportingViewId(null)
     setLeftTab('tree')
     setRightTab('properties')
 
@@ -555,23 +663,18 @@ export default function App() {
     }
   }, [busy, sceneReady, parseTick])
 
+  // Index properties after 3D is interactive. Filters should already have the
+  // store when opened. Skip if warehouse.sqlite restored.
   useEffect(() => {
-    const needsStepIndex =
-      leftTab === 'lens' ||
-      leftTab === 'breakdown' ||
-      leftTab === 'reports' ||
-      mobileTab === 'lens' ||
-      mobileTab === 'breakdown' ||
-      mobileTab === 'reports' ||
-      ((leftTab === 'filters' || mobileTab === 'filters') &&
-        filterProperty != null &&
-        !(filterProperty.kind === 'attribute' && filterProperty.name === 'IFC Type'))
-    if (!needsStepIndex) return
     if (store || warehouse || busy || parsing || warehouseBusy || !sceneReady || !result) return
     if (pendingParse.current || pendingWarehouseRestore.current) return
-    pendingParse.current = true
-    setParseTick((tick) => tick + 1)
-  }, [leftTab, mobileTab, filterProperty, store, warehouse, busy, parsing, warehouseBusy, sceneReady, result])
+    const timer = window.setTimeout(() => {
+      if (pendingParse.current || pendingWarehouseRestore.current) return
+      pendingParse.current = true
+      setParseTick((tick) => tick + 1)
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [store, warehouse, busy, parsing, warehouseBusy, sceneReady, result])
 
   useEffect(() => {
     if (!sceneReady || !result || store || warehouse) return
@@ -614,6 +717,10 @@ export default function App() {
     setSceneReady(false)
     setGeometryGen((tick) => tick + 1)
     setParsing(false)
+    setWarehouseBusy(false)
+    setWarehouseRequested(false)
+    setWarehouseProgress(null)
+    warehouseBuild.current = false
     setProgress(null)
     setLoadingName(null)
     setError(null)
@@ -639,8 +746,6 @@ export default function App() {
     setFocusIds(new Set())
     setHiddenIds(new Set())
     setTreeScopeIds(null)
-    setActiveLens(null)
-    setUserLenses([])
     setMutationTick(0)
     setMutationPatches([])
     setWarehouse((current) => {
@@ -650,15 +755,14 @@ export default function App() {
     setReportFilter(EMPTY_REPORT_FILTER)
     setFollowViewer(true)
     setSpec(EMPTY_QUERY)
-    setBreakdownMode('type')
-    setBreakdownRules([ATTRIBUTE_IFC_TYPE])
-    setBreakdownColorize(false)
-    setBreakdownNodeKey(null)
-    setBreakdownNodeIds(null)
-    setFilterProperty(null)
-    setFilterNodeKey(null)
+    setFilterRules([])
+    setFilterColorize(false)
+    setFilterNodeKeys([])
     setFilterNodeIds(null)
     setStoreFilterTree([])
+    setSavedViews([])
+    setActiveViewId(null)
+    setExportingViewId(null)
     setLeftTab('tree')
     setRightTab('properties')
     void recycleCsvProcessor()
@@ -694,7 +798,8 @@ export default function App() {
           leftTab,
           rightTab,
           spec,
-          breakdownMode,
+          breakdownMode: 'type',
+          filterRules,
           reportTemplate,
           reportGroupBy,
           reportMetrics,
@@ -702,6 +807,7 @@ export default function App() {
           followViewer,
           mutations: mutationPatches,
           quantities: persistableQuantities(quantities),
+          savedViews,
         }
         await saveProjectSession(session)
       }
@@ -728,7 +834,7 @@ export default function App() {
     leftTab,
     rightTab,
     spec,
-    breakdownMode,
+    filterRules,
     reportTemplate,
     reportGroupBy,
     reportMetrics,
@@ -736,6 +842,7 @@ export default function App() {
     followViewer,
     mutationPatches,
     quantities,
+    savedViews,
     clearViewer,
     refreshProjects,
   ])
@@ -934,10 +1041,8 @@ export default function App() {
 
   const onSpecChange = useCallback((next: QuerySpec) => {
     setSpec(next)
-    setFilterNodeKey(null)
+    setFilterNodeKeys([])
     setFilterNodeIds(null)
-    setBreakdownNodeKey(null)
-    setBreakdownNodeIds(null)
   }, [])
 
   useEffect(() => {
@@ -971,7 +1076,8 @@ export default function App() {
         leftTab,
         rightTab,
         spec,
-        breakdownMode,
+        breakdownMode: 'type',
+        filterRules,
         reportTemplate,
         reportGroupBy,
         reportMetrics,
@@ -979,6 +1085,7 @@ export default function App() {
         followViewer,
         mutations: mutationPatches,
         quantities: persistableQuantities(quantities),
+        savedViews,
       }
       void saveProjectSession(session).catch((caught) => {
         console.warn('Could not save session.json', caught)
@@ -996,7 +1103,7 @@ export default function App() {
     leftTab,
     rightTab,
     spec,
-    breakdownMode,
+    filterRules,
     reportTemplate,
     reportGroupBy,
     reportMetrics,
@@ -1004,6 +1111,7 @@ export default function App() {
     followViewer,
     mutationPatches,
     quantities,
+    savedViews,
   ])
 
   const onViewerSceneReady = useCallback(() => setSceneReady(true), [])
@@ -1029,7 +1137,7 @@ export default function App() {
       console.warn('Warehouse element lookup failed', caught)
       return null
     }
-  }, [warehouse, store])
+  }, [warehouse, store, mutationTick])
 
   useEffect(() => {
     if (!mutationView || mutationPatches.length === 0) return
@@ -1045,7 +1153,7 @@ export default function App() {
   // require it up front. Builds its own throwaway MutablePropertyView instead of
   // waiting on the reactive `mutationView` to catch up, so a freshly-hydrated
   // store's edits are guaranteed applied within this same call.
-  const onExportIfc = useCallback(async () => {
+  const onExportIfc = useCallback(async (scope?: { isolatedIds: number[]; nameHint?: string }) => {
     if (!result) {
       setError('No model loaded to export.')
       return
@@ -1066,11 +1174,14 @@ export default function App() {
         if (patch.kind === 'attribute') exportView.setAttribute(patch.expressId, patch.name, patch.value)
         else if (patch.pset) exportView.setProperty(patch.expressId, patch.pset, patch.name, patch.value)
       }
-      const exported = exportIfcWithMutations(exportStore, exportView)
+      const isolated =
+        scope?.isolatedIds && scope.isolatedIds.length > 0 ? new Set(scope.isolatedIds) : null
+      const exported = exportIfcWithMutations(exportStore, exportView, isolated)
       const baseName = (result.fileName || 'model.ifc').replace(/\.ifc$/i, '')
+      const suffix = scope?.nameHint ? `-${viewFileStem(scope.nameHint)}` : '-edited'
       const path = await saveFileDialog({
-        title: 'Export IFC',
-        defaultPath: `${baseName}-edited.ifc`,
+        title: isolated ? 'Export view as IFC' : 'Export IFC',
+        defaultPath: `${baseName}${suffix}.ifc`,
         filters: [{ name: 'IFC', extensions: ['ifc'] }],
       })
       if (!path) return
@@ -1080,7 +1191,9 @@ export default function App() {
           ? ` (${exported.warnings.length} warning${exported.warnings.length === 1 ? '' : 's'})`
           : ''
       setExportMessage(
-        `Exported ${exported.modifiedEntityCount} modified of ${exported.entityCount} entities to ${path}${warningNote}`,
+        isolated
+          ? `Exported view “${scope?.nameHint ?? 'view'}” (${exported.entityCount} entities) to ${path}${warningNote}`
+          : `Exported ${exported.modifiedEntityCount} modified of ${exported.entityCount} entities to ${path}${warningNote}`,
       )
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
@@ -1088,6 +1201,59 @@ export default function App() {
       setIfcExportBusy(false)
     }
   }, [result, store, mutationPatches])
+
+  const onSaveView = useCallback(
+    (name: string) => {
+      const view = createSavedView(name, selectedIds)
+      if (!view) {
+        setError('Select elements before saving a view.')
+        return
+      }
+      setSavedViews((current) => [...current, view])
+      setActiveViewId(view.id)
+      setError(null)
+    },
+    [selectedIds],
+  )
+
+  const onShowView = useCallback((view: SavedView) => {
+    const ids = new Set(view.ids)
+    setSelectedIds(ids)
+    setSelectedId(view.ids[0] ?? null)
+    setDisplayMode('isolate')
+    setFocusIds(ids)
+    setHiddenIds(new Set())
+    setActiveViewId(view.id)
+  }, [])
+
+  const onUpdateView = useCallback(
+    (view: SavedView) => {
+      const next = replaceSavedViewIds(view, selectedIds)
+      if (!next) {
+        setError('Select elements before updating a view.')
+        return
+      }
+      setSavedViews((current) => current.map((item) => (item.id === view.id ? next : item)))
+      setActiveViewId(view.id)
+      setError(null)
+    },
+    [selectedIds],
+  )
+
+  const onExportView = useCallback(
+    (view: SavedView) => {
+      setExportingViewId(view.id)
+      void onExportIfc({ isolatedIds: view.ids, nameHint: view.name }).finally(() => {
+        setExportingViewId(null)
+      })
+    },
+    [onExportIfc],
+  )
+
+  const onDeleteView = useCallback((view: SavedView) => {
+    setSavedViews((current) => current.filter((item) => item.id !== view.id))
+    setActiveViewId((current) => (current === view.id ? null : current))
+  }, [])
 
   const entity: EntityData | null = useMemo(() => {
     if (selectedId == null) return null
@@ -1123,13 +1289,14 @@ export default function App() {
   }, [entity, selectedIds])
 
   useEffect(() => {
+    const overlay = overlayFromPatches(mutationPatches)
     hoverLookupRef.current = (id: number) => {
       const cached = warehouseLookup?.get(id)
       const type = store?.entities.getTypeName(id) ?? cached?.ifcType ?? 'IfcProduct'
-      const name = store?.entities.getName(id) || cached?.name
+      const name = overlay.get(overlayAttributeKey(id, 'Name')) || store?.entities.getName(id) || cached?.name
       return name ? `${type} ${name}` : `${type} #${id}`
     }
-  }, [store, warehouseLookup])
+  }, [store, warehouseLookup, mutationPatches])
 
   const onHover = useCallback((id: number | null) => {
     hoverBindRef.current?.(id)
@@ -1157,63 +1324,51 @@ export default function App() {
         ids: null as Set<number> | null,
       }
     }
-  }, [warehouse, store, spec, parsing])
+  }, [warehouse, store, spec, parsing, reportTick, mutationTick])
 
   const queryIsolatedIds = queryState.ids
-  const propertiesUiOpen =
-    leftTab === 'filters' ||
-    leftTab === 'lens' ||
-    leftTab === 'breakdown' ||
-    mobileTab === 'filters' ||
-    mobileTab === 'lens' ||
-    mobileTab === 'breakdown'
-  const lensUiOpen = leftTab === 'lens' || mobileTab === 'lens' || activeLens != null
-  const breakdownUiOpen = leftTab === 'breakdown' || mobileTab === 'breakdown' || breakdownColorize
+  const groupingUiOpen =
+    leftTab === 'filters' || leftTab === 'views' || mobileTab === 'filters' || mobileTab === 'views'
+  const propertiesUiOpen = groupingUiOpen
+  const filterUiOpen = groupingUiOpen || filterColorize
 
   const filterTree = useMemo(() => {
-    if (leftTab !== 'filters' && mobileTab !== 'filters') return []
-    if (!filterProperty) return []
-    if (warehouse) return buildWarehousePropertyTree(warehouse, [filterProperty], spec)
-    if (filterProperty.kind === 'attribute' && filterProperty.name === 'IFC Type') {
-      return uniqueIfcTypeTree(geometryStore.list())
-    }
-    return storeFilterTree
-  }, [warehouse, filterProperty, spec, leftTab, mobileTab, geometryStore, geometryGen, storeFilterTree])
+    if (!filterUiOpen) return []
+    if (filterRules.length === 0) return []
+    const raw = warehouse
+      ? buildWarehousePropertyTree(warehouse, filterRules, spec)
+      : filterRules.length === 1 && isIfcTypeRef(filterRules[0])
+        ? uniqueIfcTypeTree(geometryStore.list())
+        : storeFilterTree
+    return filterColorize ? colorizeLeaves(raw) : raw
+  }, [
+    warehouse,
+    filterRules,
+    spec,
+    leftTab,
+    mobileTab,
+    geometryStore,
+    geometryGen,
+    storeFilterTree,
+    filterColorize,
+    filterUiOpen,
+    reportTick,
+    mutationTick,
+  ])
 
-  const breakdownTree = useMemo(() => {
-    if (!warehouse || breakdownRules.length === 0 || !breakdownUiOpen) return []
-    const raw = buildWarehousePropertyTree(
-      warehouse,
-      breakdownRules,
-      spec,
-      filterNodeIds ? [...filterNodeIds] : queryIsolatedIds ? [...queryIsolatedIds] : undefined,
-    )
-    return breakdownColorize ? colorizeLeaves(raw) : raw
-  }, [warehouse, breakdownRules, spec, filterNodeIds, queryIsolatedIds, breakdownColorize, breakdownUiOpen])
-
-  const breakdownColorMap = useMemo(
-    () => (breakdownColorize ? colorMapFromTree(breakdownTree) : null),
-    [breakdownColorize, breakdownTree],
+  const filterColorMap = useMemo(
+    () => (filterColorize ? colorMapFromTree(filterTree) : null),
+    [filterColorize, filterTree],
   )
 
   const isolatedIds = useMemo(
-    () => intersectIds(treeScopeIds, breakdownNodeIds ?? filterNodeIds ?? queryIsolatedIds),
-    [treeScopeIds, breakdownNodeIds, filterNodeIds, queryIsolatedIds],
+    () => intersectIds(treeScopeIds, filterNodeIds ?? queryIsolatedIds),
+    [treeScopeIds, filterNodeIds, queryIsolatedIds],
   )
 
-  const lenses = useMemo(() => [...BUILTIN_LENSES, ...userLenses], [userLenses])
-  const lensProvider = useMemo(() => {
-    if (!lensUiOpen) return null
-    try {
-      if (warehouse) return createWarehouseLensProvider(warehouse)
-      if (store && !parsing) return createLensProvider(store)
-    } catch (caught) {
-      console.warn('Lens provider failed', caught)
-    }
-    return null
-  }, [store, warehouse, lensUiOpen, parsing])
   const propertyCatalog = useMemo(() => {
     void reportTick
+    void mutationTick
     if (!propertiesUiOpen) return []
     try {
       if (warehouse) return propertyCatalogFromWarehouse(warehouse)
@@ -1222,17 +1377,7 @@ export default function App() {
       console.warn('Property catalog failed', caught)
     }
     return []
-  }, [warehouse, store, reportTick, propertiesUiOpen, parsing])
-  const lensResult = useMemo(() => {
-    if (!lensProvider || !activeLens) return null
-    try {
-      return evaluateActiveLens(activeLens, lensProvider)
-    } catch (caught) {
-      console.warn('Lens evaluation failed', caught)
-      return null
-    }
-  }, [lensProvider, activeLens])
-  const lensLegend = lensResult?.legend ?? []
+  }, [warehouse, store, reportTick, mutationTick, propertiesUiOpen, parsing])
   const dataReady = store != null || warehouse != null
   const propertyHint =
     parsing || warehouseBusy
@@ -1240,37 +1385,32 @@ export default function App() {
       : dataReady
         ? null
         : result
-          ? 'IFC Type is ready from 3D. Pick another property to index it on demand.'
+          ? 'Indexing properties in the background…'
           : null
-
-  const combinedHiddenIds = useMemo(() => {
-    if (!lensResult || lensResult.hiddenIds.size === 0) return hiddenIds
-    const next = new Set(hiddenIds)
-    for (const id of lensResult.hiddenIds) next.add(id)
-    return next
-  }, [hiddenIds, lensResult])
 
   const allExpressIds = useMemo(() => geometryStore.ids().slice(), [geometryStore, geometryGen])
 
   useEffect(() => {
     if (warehouse) return
-    if (leftTab !== 'filters' && mobileTab !== 'filters') return
-    if (!store || !filterProperty) {
+    if (leftTab !== 'filters' && leftTab !== 'views' && mobileTab !== 'filters' && mobileTab !== 'views' && !filterColorize) return
+    if (!store || filterRules.length === 0 || (filterRules.length === 1 && isIfcTypeRef(filterRules[0]))) {
       setStoreFilterTree([])
       return
     }
-    if (filterProperty.kind === 'attribute' && filterProperty.name === 'IFC Type') return
+    const overlay = overlayFromPatches(mutationPatches)
     const ids = allExpressIds
-    const labels = new Map<number, string>()
+    const layers = filterRules.map(() => new Map<number, string>())
     let index = 0
     let cancelled = false
     let frame = 0
     const pump = () => {
       if (cancelled) return
       const end = Math.min(index + STORE_PROPERTY_CHUNK, ids.length)
-      labelStorePropertyChunk(store, filterProperty, ids, index, end, labels)
+      for (let ruleIndex = 0; ruleIndex < filterRules.length; ruleIndex += 1) {
+        labelStorePropertyChunk(store, filterRules[ruleIndex], ids, index, end, layers[ruleIndex], overlay)
+      }
       index = end
-      setStoreFilterTree(treeFromLabeledIds(ids.slice(0, index), labels))
+      setStoreFilterTree(nestByValues(ids.slice(0, index), layers))
       if (index < ids.length) frame = requestAnimationFrame(pump)
     }
     frame = requestAnimationFrame(pump)
@@ -1278,15 +1418,15 @@ export default function App() {
       cancelled = true
       cancelAnimationFrame(frame)
     }
-  }, [warehouse, store, filterProperty, leftTab, mobileTab, allExpressIds])
+  }, [warehouse, store, filterRules, leftTab, mobileTab, filterColorize, allExpressIds, mutationTick, mutationPatches])
   const viewIsolateIds = displayMode === 'isolate' ? focusIds : null
   const ghostIds = useMemo(
-    () => ghostExpressIds(displayMode, focusIds, allExpressIds, isolatedIds, combinedHiddenIds),
-    [displayMode, focusIds, allExpressIds, isolatedIds, combinedHiddenIds],
+    () => ghostExpressIds(displayMode, focusIds, allExpressIds, isolatedIds, hiddenIds),
+    [displayMode, focusIds, allExpressIds, isolatedIds, hiddenIds],
   )
   const visibleIds = useMemo(
-    () => visibleExpressIds(allExpressIds, isolatedIds, viewIsolateIds, combinedHiddenIds),
-    [allExpressIds, isolatedIds, viewIsolateIds, combinedHiddenIds],
+    () => visibleExpressIds(allExpressIds, isolatedIds, viewIsolateIds, hiddenIds),
+    [allExpressIds, isolatedIds, viewIsolateIds, hiddenIds],
   )
 
   const onShowAll = useCallback(() => {
@@ -1294,10 +1434,8 @@ export default function App() {
     setFocusIds(new Set())
     setHiddenIds(new Set())
     setTreeScopeIds(null)
-    setFilterNodeKey(null)
+    setFilterNodeKeys([])
     setFilterNodeIds(null)
-    setBreakdownNodeKey(null)
-    setBreakdownNodeIds(null)
   }, [])
 
   const onHideSelected = useCallback(() => {
@@ -1318,24 +1456,29 @@ export default function App() {
   const onGhostSelected = useCallback(() => {
     if (selectedIds.size === 0) return
     if (displayMode === 'ghost' && setsEqual(focusIds, selectedIds)) {
+      if (filterNodeIds) return
       setDisplayMode('all')
       setFocusIds(new Set())
       return
     }
     setDisplayMode('ghost')
     setFocusIds(new Set(selectedIds))
-  }, [displayMode, focusIds, selectedIds])
+  }, [displayMode, focusIds, selectedIds, filterNodeIds])
 
   const onIsolateSelected = useCallback(() => {
     if (selectedIds.size === 0) return
     if (displayMode === 'isolate' && setsEqual(focusIds, selectedIds)) {
+      if (filterNodeIds) {
+        setDisplayMode('ghost')
+        return
+      }
       setDisplayMode('all')
       setFocusIds(new Set())
       return
     }
     setDisplayMode('isolate')
     setFocusIds(new Set(selectedIds))
-  }, [displayMode, focusIds, selectedIds])
+  }, [displayMode, focusIds, selectedIds, filterNodeIds])
 
   const meshStats = useMemo(
     () => ({
@@ -1422,23 +1565,20 @@ export default function App() {
       resolveTakeoffTarget({
         specType: spec.typeScope,
         specStorey: spec.storeyId,
-        filterPropertyKey: filterProperty ? propertyRefKey(filterProperty) : null,
-        filterNodeKey,
+        filterPropertyKey: filterRules.length > 0 ? filterRules.map(propertyRefKey).join('+') : null,
+        filterNodeKey: filterNodeKeys.length > 0 ? filterNodeKeys.join('||') : null,
         filterIds: filterNodeIds ? [...filterNodeIds] : null,
-        breakdownRuleKeys: breakdownRules.map(propertyRefKey),
-        breakdownNodeKey,
-        breakdownIds: breakdownNodeIds ? [...breakdownNodeIds] : null,
+        breakdownRuleKeys: [],
+        breakdownNodeKey: null,
+        breakdownIds: null,
         selectedIds: [...selectedIds],
       }),
     [
       spec.typeScope,
       spec.storeyId,
-      filterProperty,
-      filterNodeKey,
+      filterRules,
+      filterNodeKeys,
       filterNodeIds,
-      breakdownRules,
-      breakdownNodeKey,
-      breakdownNodeIds,
       selectedIds,
     ],
   )
@@ -1604,23 +1744,21 @@ export default function App() {
       const netValue = net.toFixed(3)
       const pset = 'Qto_Manual'
       mutationView.setProperty(faceBasketExpressId, pset, name, netValue)
-      setMutationPatches((prev) => {
-        const rest = prev.filter(
-          (patch) =>
-            !(
-              patch.expressId === faceBasketExpressId &&
-              patch.kind === 'property' &&
-              patch.pset === pset &&
-              patch.name === name
-            ),
-        )
-        return [...rest, { expressId: faceBasketExpressId, kind: 'property', pset, name, value: netValue }]
-      })
-      setMutationTick((tick) => tick + 1)
+      const next = mutationPatchesRef.current.filter(
+        (patch) =>
+          !(
+            patch.expressId === faceBasketExpressId &&
+            patch.kind === 'property' &&
+            patch.pset === pset &&
+            patch.name === name
+          ),
+      )
+      next.push({ expressId: faceBasketExpressId, kind: 'property', pset, name, value: netValue })
+      publishMutations(next)
       setError(null)
       onClearFaceBasket()
     },
-    [mutationView, faceBasketExpressId, faceBasketList, onClearFaceBasket],
+    [mutationView, faceBasketExpressId, faceBasketList, onClearFaceBasket, publishMutations],
   )
 
   // Quantity module: never part of 3D start. Restore/compute only when the user
@@ -1660,23 +1798,19 @@ export default function App() {
     const picked = quantities.elements.filter((item) => selectedIds.has(item.expressId))
     if (picked.length === 0) return null
     const lateral = picked.reduce((sum, item) => sum + item.metrics.LATERALAREA, 0)
-    const net = picked.reduce((sum, item) => sum + item.metrics.UNCOVEREDAREA, 0)
-    return `LATERAL ${lateral.toFixed(2)} · NET ${net.toFixed(2)} m²`
+    const net = picked.reduce((sum, item) => sum + item.metrics.GROSSAREA, 0)
+    return `LATERAL ${lateral.toFixed(2)} · GROSS ${net.toFixed(2)} m²`
   }, [quantities, selectedIds, quantityBusy, takeoffProgress])
 
-  const reportsOpen =
-    leftTab === 'reports' ||
-    rightTab === 'dashboard' ||
-    mobileTab === 'reports' ||
-    mobileTab === 'dashboard'
+  const reportBusy = warehouseRequested && !warehouse
   const reportScope = followViewer && selectedIds.size > 0 ? selectedIds : isolatedIds
   const reportOptions: FilterOptions | null = useMemo(() => {
-    if (!warehouse || !reportsOpen) return null
+    if (!warehouse || !warehouseRequested) return null
     void reportTick
     return loadFilterOptions(warehouse)
-  }, [warehouse, reportTick, reportsOpen])
+  }, [warehouse, reportTick, warehouseRequested])
   const report: ReportResult | null = useMemo(() => {
-    if (!warehouse || !reportsOpen) return null
+    if (!warehouse || !warehouseRequested) return null
     void reportTick
     try {
       return runReport(warehouse, reportTemplate, reportFilter, reportGroupBy, reportMetrics, reportScope)
@@ -1684,7 +1818,7 @@ export default function App() {
       console.warn('Report query failed', caught)
       return null
     }
-  }, [warehouse, reportTick, reportTemplate, reportFilter, reportGroupBy, reportMetrics, reportScope, reportsOpen])
+  }, [warehouse, reportTick, reportTemplate, reportFilter, reportGroupBy, reportMetrics, reportScope, warehouseRequested])
 
   const onReportRow = useCallback(
     (row: ReportRow) => {
@@ -1740,93 +1874,51 @@ export default function App() {
     filterHint: propertyHint,
     propertyCatalog,
     onSpecChange,
-    filterProperty,
+    filterRules,
     filterTree,
-    filterNodeKey,
-    onSelectFilterProperty: (ref: PropertyRef | null) => {
-      setFilterProperty(ref)
-      setFilterNodeKey(null)
+    filterNodeKeys,
+    onFilterRulesChange: (rules: PropertyRef[]) => {
+      setFilterRules(rules)
+      setFilterNodeKeys([])
       setFilterNodeIds(null)
+      setDisplayMode('all')
+      setFocusIds(new Set())
     },
-    onSelectFilterValue: (node: PropertyTreeNode | null) => {
+    onSelectFilterValue: (node: PropertyTreeNode | null, additive = false) => {
       if (!node) {
-        setFilterNodeKey(null)
+        setFilterNodeKeys([])
         setFilterNodeIds(null)
+        setSelectedIds(new Set())
+        setSelectedId(null)
+        setDisplayMode('all')
+        setFocusIds(new Set())
         return
       }
-      setFilterNodeKey(node.key)
-      setFilterNodeIds(new Set(node.ids))
-      setSelectedIds(new Set(node.ids))
-      setSelectedId(node.ids[0] ?? null)
-      setFollowViewer(true)
-    },
-    breakdownRules,
-    breakdownTree,
-    breakdownNodeKey,
-    breakdownColorize,
-    onBreakdownRulesChange: (rules: PropertyRef[]) => {
-      setBreakdownRules(rules)
-      setBreakdownMode(breakdownModeFromRef(rules[0] ?? ATTRIBUTE_IFC_TYPE))
-      setBreakdownNodeKey(null)
-      setBreakdownNodeIds(null)
-    },
-    onSelectBreakdownNode: (node: PropertyTreeNode | null) => {
-      if (!node) {
-        setBreakdownNodeKey(null)
-        setBreakdownNodeIds(null)
+      const nextKeys = toggleFilterKeys(filterNodeKeys, node.key, additive)
+      if (nextKeys.length === 0) {
+        setFilterNodeKeys([])
+        setFilterNodeIds(null)
+        setSelectedIds(new Set())
+        setSelectedId(null)
+        setDisplayMode('all')
+        setFocusIds(new Set())
         return
       }
-      setBreakdownNodeKey(node.key)
-      setBreakdownNodeIds(new Set(node.ids))
-      setSelectedIds(new Set(node.ids))
-      setSelectedId(node.ids[0] ?? null)
+      const ids = new Set(unionPropertyNodeIds(filterTree, nextKeys))
+      setFilterNodeKeys(nextKeys)
+      setFilterNodeIds(ids)
+      setSelectedIds(ids)
+      setSelectedId(nextKeys.length === 1 ? (node.ids[0] ?? null) : ([...ids][0] ?? null))
       setFollowViewer(true)
-      setLeftTab('breakdown')
-      setMobileTab('breakdown')
+      setDisplayMode('ghost')
+      setFocusIds(ids)
     },
-    onBreakdownColorizeChange: setBreakdownColorize,
-    onSelectId: (expressId: number, additive?: boolean) => onSelect(expressId, additive),
+    filterColorize,
+    onFilterColorizeChange: setFilterColorize,
     onSelectScope,
-    lenses,
-    lensId: activeLens?.id ?? null,
-    lensResult,
-    lensLegend,
-    lensReady: dataReady,
-    lensHint: propertyHint,
-    onLensSelect: (lens: Lens | null) => {
-      setActiveLens(lens)
-      if (lens) {
-        setLeftTab('lens')
-        setMobileTab('lens')
-      }
-    },
-    onCreateAutoColorLens: (spec: AutoColorSpec, name: string) => {
-      const lens = createAutoColorLens(spec, name)
-      setUserLenses((current) => [...current, lens])
-      setActiveLens(lens)
-      setLeftTab('lens')
-      setMobileTab('lens')
-    },
-    onCreatePropertyLens: (input: {
-      propertySet: string
-      propertyName: string
-      operator: LensOperator
-      propertyValue: string
-      color: string
-      kind: 'property' | 'quantity'
-    }) => {
-      const lens = createPropertyColorLens(input)
-      setUserLenses((current) => [...current, lens])
-      setActiveLens(lens)
-      setLeftTab('lens')
-      setMobileTab('lens')
-    },
-    onRemoveLens: (id: string) => {
-      setUserLenses((current) => current.filter((lens) => lens.id !== id))
-      setActiveLens((current) => (current?.id === id ? null : current))
-    },
-    reportReady: warehouse != null,
-    reportBusy: warehouseBusy,
+    reportReady: Boolean(result && sceneReady),
+    reportBusy,
+    reportProgress: warehouseProgress,
     reportTemplate,
     reportGroupBy,
     reportMetrics,
@@ -1838,6 +1930,7 @@ export default function App() {
       if (template === 'cost') setReportGroupBy('cost_code')
       if (template === 'qto') setReportGroupBy('category')
       if (template === 'progress') setReportGroupBy('status')
+      setWarehouseRequested(true)
       setLeftTab('reports')
       setRightTab('dashboard')
       setMobileTab('dashboard')
@@ -1846,6 +1939,15 @@ export default function App() {
     onReportMetrics: setReportMetrics,
     onReportFilter: setReportFilter,
     onFollowViewer: setFollowViewer,
+    savedViews,
+    activeViewId,
+    viewExportBusy: ifcExportBusy,
+    exportingViewId,
+    onSaveView,
+    onShowView,
+    onUpdateView,
+    onExportView,
+    onDeleteView,
   }
 
   const rightDock = {
@@ -1858,35 +1960,35 @@ export default function App() {
     selectionCount: selectedIds.size,
     entities: selectedEntities,
     mutationCount: mutationView?.getModifiedEntityCount() ?? 0,
-    onEditAttribute: (name: string, value: string) => {
-      if (!mutationView) return
-      const next: MutationPatch[] = [...mutationPatches]
-      for (const id of selectedIds) {
-        mutationView.setAttribute(id, name, value)
-        const rest = next.filter((patch) => !(patch.kind === 'attribute' && patch.expressId === id && patch.name === name))
-        rest.push({ expressId: id, kind: 'attribute', name, value })
-        next.length = 0
-        next.push(...rest)
-      }
-      setMutationPatches(next)
-      setMutationTick((tick) => tick + 1)
-    },
-    onEditProperty: (pset: string, name: string, value: string) => {
-      if (!mutationView) return
-      const next: MutationPatch[] = [...mutationPatches]
-      for (const id of selectedIds) {
-        mutationView.setProperty(id, pset, name, value)
-        const rest = next.filter(
-          (patch) =>
-            !(patch.kind === 'property' && patch.expressId === id && patch.pset === pset && patch.name === name),
-        )
-        rest.push({ expressId: id, kind: 'property', pset, name, value })
-        next.length = 0
-        next.push(...rest)
-      }
-      setMutationPatches(next)
-      setMutationTick((tick) => tick + 1)
-    },
+    onEditAttribute: mutationView
+      ? (name: string, value: string) => {
+          const next: MutationPatch[] = [...mutationPatches]
+          for (const id of selectedIds) {
+            mutationView.setAttribute(id, name, value)
+            const rest = next.filter((patch) => !(patch.kind === 'attribute' && patch.expressId === id && patch.name === name))
+            rest.push({ expressId: id, kind: 'attribute', name, value })
+            next.length = 0
+            next.push(...rest)
+          }
+          publishMutations(next)
+        }
+      : undefined,
+    onEditProperty: mutationView
+      ? (pset: string, name: string, value: string) => {
+          const next: MutationPatch[] = [...mutationPatches]
+          for (const id of selectedIds) {
+            mutationView.setProperty(id, pset, name, value)
+            const rest = next.filter(
+              (patch) =>
+                !(patch.kind === 'property' && patch.expressId === id && patch.pset === pset && patch.name === name),
+            )
+            rest.push({ expressId: id, kind: 'property', pset, name, value })
+            next.length = 0
+            next.push(...rest)
+          }
+          publishMutations(next)
+        }
+      : undefined,
     onClose: () => {
       setSelectedId(null)
       setSelectedIds(new Set())
@@ -1915,7 +2017,8 @@ export default function App() {
     },
     onError: setError,
     report,
-    reportBusy: warehouseBusy,
+    reportBusy,
+    reportProgress: warehouseProgress,
     followViewer,
     onReportRow,
     onReportExport,
@@ -1923,9 +2026,8 @@ export default function App() {
 
   const mobileTabs: Array<{ id: MobileTab; label: string }> = [
     { id: 'tree', label: 'Tree' },
-    { id: 'breakdown', label: 'Breakdown' },
     { id: 'filters', label: 'Filters' },
-    { id: 'lens', label: 'Lens' },
+    { id: 'views', label: 'Views' },
     { id: 'reports', label: 'Reports' },
     { id: 'properties', label: 'Properties' },
     { id: 'quantities', label: 'Quantities' },
@@ -1985,7 +2087,7 @@ export default function App() {
         matchCount={isolatedIds?.size ?? null}
         hasSelection={selectedIds.size > 0}
         displayMode={displayMode}
-        hiddenCount={combinedHiddenIds.size}
+        hiddenCount={hiddenIds.size}
         canShowAll={displayMode !== 'all' || hiddenIds.size > 0 || treeScopeIds != null}
         calculatedView={calculatedView}
         canShowCalculatedView={quantities != null || quantityBusy}
@@ -2035,7 +2137,7 @@ export default function App() {
               onSceneReady={onViewerSceneReady}
               selectedIds={selectedIds}
               isolatedIds={isolatedIds}
-              hiddenIds={combinedHiddenIds}
+              hiddenIds={hiddenIds}
               ghostIds={ghostIds}
               viewIsolateIds={viewIsolateIds}
               onSelect={onSelect}
@@ -2043,7 +2145,7 @@ export default function App() {
               fitToken={fitToken}
               theme={theme}
               overlayFaces={overlayFaces}
-              colorOverrides={lensResult?.colorMap ?? breakdownColorMap}
+              colorOverrides={filterColorMap}
               selectedFaceId={selectedFaceId}
               onSelectFace={onSelectFace}
               basketFaces={faceBasketList.length > 0 ? faceBasketList : null}
@@ -2114,6 +2216,8 @@ export default function App() {
         quantityBusy={quantityBusy}
         surfacesReady={quantities != null && !quantityBusy}
         quantitySummary={quantitySummary}
+        reportBusy={reportBusy}
+        reportProgress={warehouseProgress}
         onOpenQuantities={onOpenQuantities}
       />
     </div>

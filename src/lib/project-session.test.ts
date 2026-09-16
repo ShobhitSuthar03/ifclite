@@ -72,5 +72,32 @@ describe('project session', () => {
   it('rejects sessions that are not version 1', () => {
     expect(parseSessionJson('{"version":2}')).toBeNull()
     expect(parseSessionJson(JSON.stringify(emptySession('abc', 'a.ifc')))?.cacheKey).toBe('abc')
+    expect(parseSessionJson(JSON.stringify(emptySession('abc', 'a.ifc')))?.filterRules).toEqual([])
+    const legacy = JSON.parse(JSON.stringify(emptySession('abc', 'a.ifc'))) as { filterRules?: unknown }
+    delete legacy.filterRules
+    expect(parseSessionJson(JSON.stringify(legacy))?.filterRules).toEqual([])
+    const withRules = emptySession('abc', 'a.ifc')
+    withRules.filterRules = [{ set: 'Pset', name: 'Level', kind: 'property' }]
+    expect(parseSessionJson(JSON.stringify(withRules))?.filterRules).toEqual([
+      { set: 'Pset', name: 'Level', kind: 'property' },
+    ])
+    const withViews = emptySession('abc', 'a.ifc')
+    withViews.savedViews = [{ id: 'view-1', name: 'Walls', ids: [2, 1], createdAt: 'now' }]
+    expect(parseSessionJson(JSON.stringify(withViews))?.savedViews).toEqual([
+      { id: 'view-1', name: 'Walls', ids: [1, 2], createdAt: 'now' },
+    ])
+    const legacyViews = JSON.parse(JSON.stringify(emptySession('abc', 'a.ifc'))) as { savedViews?: unknown }
+    delete legacyViews.savedViews
+    expect(parseSessionJson(JSON.stringify(legacyViews))?.savedViews).toEqual([])
+  })
+
+  it('maps leftover Breakdown and Lens tabs onto Filters', () => {
+    const session = emptySession('abc', 'a.ifc') as { leftTab: string }
+    session.leftTab = 'breakdown'
+    expect(parseSessionJson(JSON.stringify(session))?.leftTab).toBe('filters')
+    session.leftTab = 'lens'
+    expect(parseSessionJson(JSON.stringify(session))?.leftTab).toBe('filters')
+    session.leftTab = 'views'
+    expect(parseSessionJson(JSON.stringify(session))?.leftTab).toBe('views')
   })
 })

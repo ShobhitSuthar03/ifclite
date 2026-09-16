@@ -3,11 +3,21 @@ import { IfcTypeEnum } from '@ifc-lite/data'
 import { Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { BreakdownRuleList } from '@/components/breakdown-rule-list'
 import { PropertyValueTree } from '@/components/property-value-tree'
 import { groupingCatalog, type PropertyCatalogSet } from '@/lib/bim-sql'
 import type { SpatialTreeNode } from '@/lib/ifc-data'
 import { EMPTY_QUERY, TYPE_OPTIONS, type QuerySpec, type TypeScope } from '@/lib/ifc-query'
-import { propertyRefKey, samePropertyRef, type PropertyRef, type PropertyTreeNode } from '@/lib/property-tree'
+import {
+  MAX_FILTER_RULES,
+  addFilterRule,
+  promoteFilterRule,
+  propertyRefKey,
+  samePropertyRef,
+  type PropertyRef,
+  type PropertyTreeNode,
+} from '@/lib/property-tree'
+import { isAdditiveModifier } from '@/lib/selection'
 import { cn, formatCount } from '@/lib/utils'
 
 const fieldClass =
@@ -16,44 +26,56 @@ const fieldClass =
 type FilterBarProps = {
   ready: boolean
   hint?: string | null
+  intro?: string
   spatialRoot: SpatialTreeNode | null
   catalog: PropertyCatalogSet[]
   spec: QuerySpec
-  selectedProperty: PropertyRef | null
+  rules: PropertyRef[]
   valueTree: PropertyTreeNode[]
-  selectedKey: string | null
+  selectedKeys: string[]
   matchCount: number | null
   error: string | null
   onChange: (spec: QuerySpec) => void
-  onSelectProperty: (ref: PropertyRef | null) => void
-  onSelectValue: (node: PropertyTreeNode | null) => void
+  onRulesChange: (rules: PropertyRef[]) => void
+  onSelectValue: (node: PropertyTreeNode | null, additive?: boolean) => void
+  colorize: boolean
+  onColorizeChange: (colorize: boolean) => void
+  showColorize?: boolean
+  multiSelect?: boolean
 }
 
 export function FilterBar({
   ready,
   hint,
+  intro,
   spatialRoot,
   catalog,
   spec,
-  selectedProperty,
+  rules,
   valueTree,
-  selectedKey,
+  selectedKeys,
   matchCount,
   error,
   onChange,
-  onSelectProperty,
+  onRulesChange,
   onSelectValue,
+  colorize,
+  onColorizeChange,
+  showColorize = true,
+  multiSelect = false,
 }: FilterBarProps) {
   const [search, setSearch] = useState('')
   const storeys = spatialRoot ? flattenStoreys(spatialRoot) : []
   const disabled = !ready
   const groups = useMemo(() => groupingCatalog(catalog, search), [catalog, search])
+  const full = rules.length >= MAX_FILTER_RULES
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="space-y-2 border-b border-border p-3">
         <p className="text-[11px] text-muted-foreground">
-          Unique properties from this model. Pick a property, then click a value to select those elements.
+          {intro ??
+            'Pick properties to build a breakdown. Click a used property or use the arrows to change order — the value list follows Group, then Then.'}
         </p>
         {hint ? <p className="text-[11px] text-muted-foreground">{hint}</p> : null}
         <div className="grid grid-cols-2 gap-1.5">
@@ -99,56 +121,109 @@ export function FilterBar({
             onChange={(event) => setSearch(event.target.value)}
           />
         </label>
+        <BreakdownRuleList rules={rules} disabled={disabled} onChange={onRulesChange} />
       </div>
-      <div className="grid min-h-0 flex-1 grid-rows-2">
-        <ScrollArea className="min-h-0 border-b border-border">
-          {groups.length === 0 ? (
-            <p className="px-3 py-6 text-xs text-muted-foreground italic">No properties match.</p>
-          ) : (
-            groups.map((group) => (
-              <div key={`${group.kind}:${group.set}`} className="py-1">
-                <p className="px-3 py-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
-                  {group.set}
-                </p>
-                {group.names.map((name) => {
-                  const ref: PropertyRef = { set: group.set, name, kind: group.kind }
-                  const active = selectedProperty ? samePropertyRef(selectedProperty, ref) : false
-                  return (
-                    <button
-                      key={propertyRefKey(ref)}
-                      type="button"
-                      disabled={disabled}
-                      className={cn(
-                        'flex w-full px-3 py-1 text-left text-[13px] hover:bg-accent disabled:opacity-40',
-                        active && 'bg-primary/20',
-                      )}
-                      onClick={() => onSelectProperty(active ? null : ref)}
-                    >
-                      {name}
-                    </button>
-                  )
-                })}
-              </div>
-            ))
-          )}
-        </ScrollArea>
-        <ScrollArea className="min-h-0">
-          {!selectedProperty ? (
-            <p className="px-3 py-6 text-xs text-muted-foreground">Choose a property to list its unique values.</p>
-          ) : valueTree.length === 0 ? (
-            <p className="px-3 py-6 text-xs text-muted-foreground italic">No values in this scope.</p>
+      <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,2fr)_minmax(0,3fr)]">
+        <div className="flex min-h-0 flex-col border-b border-border">
+          <div className="flex h-8 shrink-0 items-center border-b border-border px-3">
+            <span className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">Properties</span>
+          </div>
+          <ScrollArea className="min-h-0 flex-1">
+            {groups.length === 0 ? (
+              <p className="px-3 py-6 text-xs text-muted-foreground italic">No properties match.</p>
+            ) : (
+              groups.map((group) => (
+                <div key={`${group.kind}:${group.set}`} className="py-1">
+                  <p className="px-3 py-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+                    {group.set}
+                  </p>
+                  {group.names.map((name) => {
+                    const ref: PropertyRef = { set: group.set, name, kind: group.kind }
+                    const usedIndex = rules.findIndex((rule) => samePropertyRef(rule, ref))
+                    const used = usedIndex >= 0
+                    return (
+                      <button
+                        key={propertyRefKey(ref)}
+                        type="button"
+                        disabled={disabled || (!used && full)}
+                        className={cn(
+                          'flex w-full items-center gap-2 px-3 py-1 text-left text-[13px] hover:bg-accent disabled:opacity-40',
+                          used && 'bg-primary/15',
+                        )}
+                        onClick={() => {
+                          if (used) {
+                            const next = promoteFilterRule(rules, ref)
+                            if (next === rules) return
+                            onRulesChange(next)
+                            return
+                          }
+                          onRulesChange(addFilterRule(rules, ref))
+                        }}
+                      >
+                        {used ? (
+                          <span className="w-4 shrink-0 text-[10px] font-semibold text-muted-foreground">
+                            {usedIndex + 1}
+                          </span>
+                        ) : (
+                          <span className="w-4 shrink-0" />
+                        )}
+                        <span className="truncate">{name}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              ))
+            )}
+          </ScrollArea>
+        </div>
+        <div className="h-full min-h-0 overflow-hidden">
+          {rules.length === 0 ? (
+            <PropertyValueTree
+              nodes={[]}
+              selectedKeys={[]}
+              emptyText="Pick a property to create a breakdown. Then pick a second property to nest unique values."
+              onSelect={() => undefined}
+            />
           ) : (
             <PropertyValueTree
               nodes={valueTree}
-              selectedKey={selectedKey}
-              onSelect={(node) => onSelectValue(selectedKey === node.key ? null : node)}
+              selectedKeys={selectedKeys}
+              levels={rules.map((rule) => rule.name)}
+              emptyText="No values in this scope."
+              onSelect={(node, event) => {
+                const additive = multiSelect || isAdditiveModifier(event)
+                if (!additive && selectedKeys.length === 1 && selectedKeys[0] === node.key) {
+                  onSelectValue(null)
+                  return
+                }
+                onSelectValue(node, additive)
+              }}
             />
           )}
-        </ScrollArea>
+        </div>
       </div>
       <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2">
+        {showColorize ? (
+          <label className={cn('flex items-center gap-1.5 text-[11px]', disabled && 'opacity-50')}>
+            <input
+              type="checkbox"
+              disabled={disabled}
+              checked={colorize}
+              onChange={(event) => onColorizeChange(event.target.checked)}
+            />
+            Color 3D
+          </label>
+        ) : (
+          <span className="text-[11px] text-muted-foreground">Property or 3D</span>
+        )}
         <p className="text-[11px] text-muted-foreground">
-          {matchCount != null ? `${formatCount(matchCount)} selected` : 'Click a value to select'}
+          {matchCount != null
+            ? `${formatCount(matchCount)} selected`
+            : rules.length === 0
+              ? 'Pick a property to group unique values'
+              : multiSelect
+                ? 'Click values to combine them'
+                : 'Click a value · Ctrl-click to add'}
         </p>
         <Button
           variant="ghost"
@@ -156,7 +231,7 @@ export function FilterBar({
           disabled={disabled}
           onClick={() => {
             onChange(EMPTY_QUERY)
-            onSelectProperty(null)
+            onRulesChange([])
             onSelectValue(null)
           }}
         >

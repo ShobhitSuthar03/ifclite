@@ -1,8 +1,5 @@
 import type { Aabb, QtoMesh } from '@/lib/geometry-qto/types'
-import { aabbOverlap, emptyAabb, expandAabb, expandAabbBy } from '@/lib/geometry-qto/vec'
-
-const NEIGHBOR_PAD_M = 0.05
-const MAX_NEIGHBOR_MESHES = 120
+import { emptyAabb, expandAabb } from '@/lib/geometry-qto/vec'
 
 export type IndexedQtoMesh = {
   mesh: QtoMesh
@@ -25,15 +22,6 @@ export function meshWorldAabb(mesh: QtoMesh): Aabb {
   return box
 }
 
-function unionAabb(boxes: Aabb[]): Aabb {
-  const box = emptyAabb()
-  for (const item of boxes) {
-    expandAabb(box, item.min)
-    expandAabb(box, item.max)
-  }
-  return box
-}
-
 export function indexMeshAabbs(meshes: QtoMesh[]): IndexedQtoMesh[] {
   return meshes.map((mesh) => ({ mesh, aabb: meshWorldAabb(mesh) }))
 }
@@ -50,34 +38,11 @@ export function typeQtoMeshes(
   })
 }
 
-/** Selected element meshes plus nearby meshes used only for contact detection. */
-export function meshesForQuantityJob(
-  meshes: QtoMesh[],
-  targetIds: Set<number>,
-  maxNeighbors = MAX_NEIGHBOR_MESHES,
-): QtoMesh[] {
-  return meshesForQuantityIndex(indexMeshAabbs(meshes), targetIds, maxNeighbors)
+/** Selected element meshes for a takeoff job. */
+export function meshesForQuantityJob(meshes: QtoMesh[], targetIds: Set<number>): QtoMesh[] {
+  return meshesForQuantityIndex(indexMeshAabbs(meshes), targetIds)
 }
 
-export function meshesForQuantityIndex(
-  index: IndexedQtoMesh[],
-  targetIds: Set<number>,
-  maxNeighbors = MAX_NEIGHBOR_MESHES,
-  maxNeighborTriangles = Number.POSITIVE_INFINITY,
-): QtoMesh[] {
-  const selected = index.filter((item) => targetIds.has(item.mesh.expressId))
-  if (selected.length === 0) return []
-  const region = expandAabbBy(unionAabb(selected.map((item) => item.aabb)), NEIGHBOR_PAD_M)
-  const nearby: QtoMesh[] = []
-  let neighborTriangles = 0
-  for (const item of index) {
-    if (targetIds.has(item.mesh.expressId)) continue
-    if (!aabbOverlap(region, item.aabb)) continue
-    const triangles = (item.mesh.indices.length / 3) | 0
-    if (nearby.length > 0 && neighborTriangles + triangles > maxNeighborTriangles) break
-    nearby.push(item.mesh)
-    neighborTriangles += triangles
-    if (nearby.length >= maxNeighbors) break
-  }
-  return selected.map((item) => item.mesh).concat(nearby)
+export function meshesForQuantityIndex(index: IndexedQtoMesh[], targetIds: Set<number>): QtoMesh[] {
+  return index.filter((item) => targetIds.has(item.mesh.expressId)).map((item) => item.mesh)
 }

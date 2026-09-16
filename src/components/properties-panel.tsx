@@ -1,10 +1,10 @@
-import { useMemo, useState, type ReactNode } from 'react'
-import { ChevronDown, X } from 'lucide-react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Check, ChevronDown, Pencil, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import type { EntityData } from '@/lib/ifc-data'
 import { AREA_FIELDS, STANDARD_FIELDS, type AreaMetrics } from '@/lib/geometry-qto'
-import { commonProperties, selectionTypeLabel } from '@/lib/common-properties'
+import { commonProperties, selectionTypeLabel, type CommonPropertyRow } from '@/lib/common-properties'
 import { formatCount } from '@/lib/utils'
 
 type PropertiesPanelProps = {
@@ -40,6 +40,13 @@ export function PropertiesPanel({
   const multi = entities.length > 1
   const primary = data ?? entities[0] ?? null
   const common = useMemo(() => (multi ? commonProperties(entities) : []), [entities, multi])
+  const canMutate = Boolean(onEditAttribute || onEditProperty)
+  const [editMode, setEditMode] = useState(false)
+  const selectionKey = entities.map((item) => item.expressId).join(',')
+  useEffect(() => {
+    setEditMode(false)
+  }, [selectionKey])
+
   const inner = !primary ? (
     <p className="px-3 py-6 text-xs text-muted-foreground">
       {parsing
@@ -57,12 +64,28 @@ export function PropertiesPanel({
             {multi ? `${formatCount(entities.length)} elements` : primary.name || `Entity #${primary.expressId}`}
           </p>
           <p className="font-mono text-[11px] text-muted-foreground">
-            {multi ? 'Common properties · numeric values are summed' : `GUID: ${primary.globalId || '—'}`}
+            {multi
+              ? editMode
+                ? 'Editing all selected · same value is written to every element'
+                : 'Common properties · numeric values are summed'
+              : `GUID: ${primary.globalId || '—'}`}
           </p>
           {mutationCount > 0 ? (
             <p className="mt-1 text-[11px] text-primary">{formatCount(mutationCount)} unsaved property edits</p>
           ) : null}
         </div>
+        {canMutate ? (
+          <Button
+            variant={editMode ? 'default' : 'outline'}
+            size="sm"
+            className="h-7 shrink-0 px-2 text-[11px]"
+            onClick={() => setEditMode((value) => !value)}
+            title={editMode ? 'Finish editing' : 'Edit properties'}
+          >
+            {editMode ? <Check className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />}
+            {editMode ? 'Done' : 'Edit'}
+          </Button>
+        ) : null}
         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} title="Clear selection (Esc)">
           <X />
         </Button>
@@ -73,44 +96,48 @@ export function PropertiesPanel({
             groupRows(common).map(([group, rows]) => (
               <PsetGroup key={group} name={group} defaultOpen>
                 {rows.map((row) => (
-                  <Row
+                  <PropertyValue
                     key={`${row.group}-${row.name}`}
-                    label={row.name}
-                    value={row.summed ? `${row.value} (sum)` : row.value}
+                    row={row}
+                    editMode={editMode}
+                    onEditAttribute={onEditAttribute}
+                    onEditProperty={onEditProperty}
                   />
                 ))}
               </PsetGroup>
             ))
           ) : (
-            <>
-              <PsetGroup name="Attributes" defaultOpen>
-                  <Row label="GlobalId" value={primary.globalId} />
-                <EditableRow
-                    key={`${primary.expressId}-Name-${mutationCount}`}
-                    label="Name"
-                    value={primary.name}
-                    onSave={(value) => onEditAttribute?.('Name', value)}
-                  />
-                <EditableRow
-                    key={`${primary.expressId}-Description-${mutationCount}`}
-                    label="Description"
-                    value={primary.description}
-                    onSave={(value) => onEditAttribute?.('Description', value)}
-                  />
-                <EditableRow
-                    key={`${primary.expressId}-ObjectType-${mutationCount}`}
-                    label="ObjectType"
-                    value={primary.objectType}
-                    onSave={(value) => onEditAttribute?.('ObjectType', value)}
-                  />
-                <EditableRow
-                    key={`${primary.expressId}-Tag-${mutationCount}`}
-                    label="Tag"
-                    value={primary.tag}
-                    onSave={(value) => onEditAttribute?.('Tag', value)}
-                  />
-              </PsetGroup>
-            </>
+            <PsetGroup name="Attributes" defaultOpen>
+              <Row label="GlobalId" value={primary.globalId} />
+              <EditableRow
+                key={`${primary.expressId}-Name-${mutationCount}-${editMode}`}
+                label="Name"
+                value={primary.name}
+                editMode={editMode}
+                onSave={(value) => onEditAttribute?.('Name', value)}
+              />
+              <EditableRow
+                key={`${primary.expressId}-Description-${mutationCount}-${editMode}`}
+                label="Description"
+                value={primary.description}
+                editMode={editMode}
+                onSave={(value) => onEditAttribute?.('Description', value)}
+              />
+              <EditableRow
+                key={`${primary.expressId}-ObjectType-${mutationCount}-${editMode}`}
+                label="ObjectType"
+                value={primary.objectType}
+                editMode={editMode}
+                onSave={(value) => onEditAttribute?.('ObjectType', value)}
+              />
+              <EditableRow
+                key={`${primary.expressId}-Tag-${mutationCount}-${editMode}`}
+                label="Tag"
+                value={primary.tag}
+                editMode={editMode}
+                onSave={(value) => onEditAttribute?.('Tag', value)}
+              />
+            </PsetGroup>
           )}
           <PsetGroup name="Geometry" defaultOpen>
             <Row label="Meshes" value={formatCount(meshCount)} />
@@ -151,9 +178,10 @@ export function PropertiesPanel({
               <PsetGroup key={set.name} name={set.name} defaultOpen>
                 {set.properties.map((property) => (
                   <EditableRow
-                    key={`${primary.expressId}-${set.name}-${property.name}-${mutationCount}`}
+                    key={`${primary.expressId}-${set.name}-${property.name}-${mutationCount}-${editMode}`}
                     label={property.name}
                     value={property.value}
+                    editMode={editMode}
                     onSave={(value) => onEditProperty?.(set.name, property.name, value)}
                   />
                 ))}
@@ -184,14 +212,42 @@ export function PropertiesPanel({
   )
 }
 
-function groupRows(rows: ReturnType<typeof commonProperties>) {
-  const groups = new Map<string, typeof rows>()
+function groupRows(rows: CommonPropertyRow[]) {
+  const groups = new Map<string, CommonPropertyRow[]>()
   for (const row of rows) {
     const list = groups.get(row.group) ?? []
     list.push(row)
     groups.set(row.group, list)
   }
   return [...groups.entries()]
+}
+
+function PropertyValue({
+  row,
+  editMode,
+  onEditAttribute,
+  onEditProperty,
+}: {
+  row: CommonPropertyRow
+  editMode: boolean
+  onEditAttribute?: (name: string, value: string) => void
+  onEditProperty?: (pset: string, name: string, value: string) => void
+}) {
+  const writable = editMode && !row.summed && row.kind !== 'quantity'
+  const display = row.summed ? `${row.value} (sum)` : row.value
+  if (!writable) return <Row label={row.name} value={display} />
+  return (
+    <EditableRow
+      label={row.name}
+      value={row.mixed ? '' : row.value}
+      mixed={row.mixed}
+      editMode
+      onSave={(value) => {
+        if (row.kind === 'attribute') onEditAttribute?.(row.name, value)
+        else onEditProperty?.(row.group, row.name, value)
+      }}
+    />
+  )
 }
 
 function PsetGroup({
@@ -241,39 +297,55 @@ function Row({ label, value }: { label: string; value: string }) {
 function EditableRow({
   label,
   value,
+  mixed = false,
+  editMode = false,
   onSave,
 }: {
   label: string
   value: string
+  mixed?: boolean
+  editMode?: boolean
   onSave?: (value: string) => void
 }) {
   const [draft, setDraft] = useState(value)
   const [editing, setEditing] = useState(false)
-  if (!onSave) return <Row label={label} value={value} />
+  useEffect(() => {
+    setEditing(false)
+    setDraft(value)
+  }, [value, editMode])
+  if (!onSave || !editMode) return <Row label={label} value={mixed ? 'mixed' : value} />
   if (!editing) {
     return (
       <button
         type="button"
         className="flex w-full justify-between gap-3 border-b border-dashed border-border py-1 text-left text-[12px] last:border-b-0 hover:bg-accent/40"
         onClick={() => {
-          setDraft(value === '—' ? '' : value)
+          setDraft(mixed || value === '—' ? '' : value)
           setEditing(true)
         }}
       >
         <span className="max-w-[50%] shrink-0 text-muted-foreground">{label}</span>
-        <span className={`min-w-0 break-all text-right font-medium ${!value || value === '—' ? 'text-muted-foreground italic' : ''}`}>
-          {!value || value === '—' ? '—' : value}
+        <span
+          className={`min-w-0 break-all text-right font-medium ${mixed || !value || value === '—' ? 'text-muted-foreground italic' : ''}`}
+        >
+          {mixed ? 'mixed' : !value || value === '—' ? '—' : value}
         </span>
       </button>
     )
+  }
+  const commit = () => {
+    const next = draft.trim()
+    setEditing(false)
+    if (mixed && next === '') return
+    if (next === 'mixed') return
+    onSave(next)
   }
   return (
     <form
       className="flex items-center gap-2 border-b border-dashed border-border py-1 last:border-b-0"
       onSubmit={(event) => {
         event.preventDefault()
-        onSave(draft)
-        setEditing(false)
+        commit()
       }}
     >
       <span className="max-w-[40%] shrink-0 text-[12px] text-muted-foreground">{label}</span>
@@ -281,11 +353,9 @@ function EditableRow({
         autoFocus
         className="h-6 min-w-0 flex-1 rounded border border-border bg-background px-1 text-[12px]"
         value={draft}
+        placeholder={mixed ? 'Type a value for all selected' : undefined}
         onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => {
-          onSave(draft)
-          setEditing(false)
-        }}
+        onBlur={commit}
       />
     </form>
   )

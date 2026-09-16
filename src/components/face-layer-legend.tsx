@@ -7,14 +7,12 @@ const LAYERS: Array<{ id: FaceLayer; label: string; color: string; hint: string 
   { id: 'lateral', label: 'LATERALAREA', color: '#2aa198', hint: 'Vertical sides' },
   { id: 'top', label: 'TOPAREA', color: '#cb4b16', hint: 'Upward faces' },
   { id: 'bottom', label: 'UNDERAREA', color: '#6c71c4', hint: 'Soffits / undersides' },
-  { id: 'contact', label: 'COVEREDAREA', color: '#dc322f', hint: 'Contact with neighbors' },
 ]
 
 function layerArea(faces: FaceQuantity[], layer: FaceLayer): number {
   let sum = 0
   for (const face of faces) {
     if (layer === 'all') sum += face.grossArea
-    else if (layer === 'contact') sum += face.overlapArea
     else if (face.kind === layer) sum += face.grossArea
   }
   return sum

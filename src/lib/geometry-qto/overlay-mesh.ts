@@ -1,15 +1,14 @@
 import * as THREE from 'three'
 import type { FaceQuantity } from '@/lib/geometry-qto'
-import { CONTACT_FACE_COLOR, FACE_KIND_COLOR } from '@/lib/geometry-qto'
+import { FACE_KIND_COLOR } from '@/lib/geometry-qto'
 
 /** Push each classified face slightly off the source mesh so it wins the depth test. */
 const FACE_OFFSET_M = 0.01
 
-export type FaceLayer = 'all' | 'lateral' | 'top' | 'bottom' | 'contact'
+export type FaceLayer = 'all' | 'lateral' | 'top' | 'bottom'
 
 export function faceMatchesLayer(face: FaceQuantity, layer: FaceLayer): boolean {
   if (layer === 'all') return true
-  if (layer === 'contact') return face.overlapArea > 1e-8
   return face.kind === layer
 }
 
@@ -31,10 +30,7 @@ export function toggleFaceLayer(current: Set<FaceLayer>, id: FaceLayer): Set<Fac
   return next
 }
 
-export function overlayFaceColor(face: FaceQuantity, layers: Set<FaceLayer>): number {
-  if (layers.has('contact') && !layers.has('all') && face.overlapArea > 1e-8) {
-    return CONTACT_FACE_COLOR
-  }
+export function overlayFaceColor(face: FaceQuantity, _layers: Set<FaceLayer>): number {
   return FACE_KIND_COLOR[face.kind]
 }
 

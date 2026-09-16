@@ -1,5 +1,4 @@
 import { extractFaces, isBuildingElementType, isColumnType } from '@/lib/geometry-qto/faces'
-import { overlapMap } from '@/lib/geometry-qto/overlap'
 import type {
   AreaMetrics,
   ElementQuantity,
@@ -9,7 +8,7 @@ import type {
   QuantityResult,
   QtoMesh,
 } from '@/lib/geometry-qto/types'
-import { DEFAULT_CONTACT_GAP, DEFAULT_HORIZONTAL_DOT, VIEWER_UP } from '@/lib/geometry-qto/types'
+import { DEFAULT_HORIZONTAL_DOT, VIEWER_UP } from '@/lib/geometry-qto/types'
 
 function flattenTriangles(triangles: PlanarFace['triangles']): number[] {
   const positions: number[] = []
@@ -19,24 +18,17 @@ function flattenTriangles(triangles: PlanarFace['triangles']): number[] {
   return positions
 }
 
-function toQuantity(
-  face: PlanarFace,
-  overlapArea: number,
-  overlappingIds: number[],
-  keepPositions: boolean,
-): FaceQuantity {
-  const gross = face.area
-  const overlap = Math.min(overlapArea, gross)
+function toQuantity(face: PlanarFace, keepPositions: boolean): FaceQuantity {
   return {
     faceId: face.faceId,
     expressId: face.expressId,
     ifcType: face.ifcType,
     kind: face.kind,
     normal: [face.normal.x, face.normal.y, face.normal.z],
-    grossArea: gross,
-    overlapArea: overlap,
-    netArea: Math.max(0, gross - overlap),
-    overlappingIds,
+    grossArea: face.area,
+    overlapArea: 0,
+    netArea: face.area,
+    overlappingIds: [],
     positions: keepPositions ? flattenTriangles(face.triangles) : [],
   }
 }
@@ -97,10 +89,8 @@ function metricsFromFaces(faces: PlanarFace[], quantities: FaceQuantity[]): Area
   let under = 0
   let top = 0
   let gross = 0
-  let covered = 0
   for (const face of quantities) {
     gross += face.grossArea
-    covered += face.overlapArea
     if (face.kind === 'lateral') lateral += face.grossArea
     else if (face.kind === 'bottom') under += face.grossArea
     else top += face.grossArea
@@ -114,8 +104,8 @@ function metricsFromFaces(faces: PlanarFace[], quantities: FaceQuantity[]): Area
     UNDERAREA: under,
     TOPAREA: top,
     GROSSAREA: gross,
-    COVEREDAREA: covered,
-    UNCOVEREDAREA: Math.max(0, gross - covered),
+    COVEREDAREA: 0,
+    UNCOVEREDAREA: gross,
     CROSSAREA: longest.area,
     FOOTPRINTAREA: proj.y,
     VOLUME: enclosedVolume(faces),
@@ -157,14 +147,12 @@ function emptyTotals(): QuantityResult['totals'] {
 }
 
 export function computeElementQuantities(meshes: QtoMesh[], options?: FormworkOptions): QuantityResult {
-  const contactGap = options?.contactGap ?? DEFAULT_CONTACT_GAP
   const targetIds = options?.targetIds
   const keepPositionsFor = options?.keepPositionsFor
   const allFaces = extractFaces(meshes, {
     up: options?.up ?? VIEWER_UP,
     horizontalDot: options?.horizontalDot ?? DEFAULT_HORIZONTAL_DOT,
   })
-  const overlaps = overlapMap(allFaces, contactGap)
   const grouped = new Map<number, PlanarFace[]>()
   for (const face of allFaces) {
     if (!isBuildingElementType(face.ifcType)) continue
@@ -180,10 +168,7 @@ export function computeElementQuantities(meshes: QtoMesh[], options?: FormworkOp
       const keepPositions = keepPositionsFor
         ? keepPositionsFor.has(expressId)
         : (options?.keepPositions ?? !targetIds)
-      const quantities = faces.map((face) => {
-        const hit = overlaps.get(face.faceId) ?? { overlapArea: 0, overlappingIds: [] }
-        return toQuantity(face, hit.overlapArea, hit.overlappingIds, keepPositions)
-      })
+      const quantities = faces.map((face) => toQuantity(face, keepPositions))
       const metrics = metricsFromFaces(faces, quantities)
       return {
         expressId,
@@ -191,8 +176,8 @@ export function computeElementQuantities(meshes: QtoMesh[], options?: FormworkOp
         faces: quantities,
         metrics,
         grossArea: metrics.GROSSAREA,
-        overlapArea: metrics.COVEREDAREA,
-        netArea: metrics.UNCOVEREDAREA,
+        overlapArea: 0,
+        netArea: metrics.GROSSAREA,
       }
     })
 

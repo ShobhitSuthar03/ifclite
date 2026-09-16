@@ -78,18 +78,6 @@ export const AREA_FIELDS: Array<{
     hint: 'Upward-facing horizontal or inclined area (slab tops, beam tops).',
   },
   {
-    key: 'UNCOVEREDAREA',
-    aliases: ['NETAREA'],
-    label: 'UNCOVEREDAREA / NETAREA',
-    hint: 'Exposed area after subtracting contact with adjacent elements.',
-  },
-  {
-    key: 'COVEREDAREA',
-    aliases: ['CONTACTAREA'],
-    label: 'COVEREDAREA / CONTACTAREA',
-    hint: 'Face area shared with an opposite neighbor (elements pressing together). Flush same-facing faces, such as a slab edge aligned with a wall elevation, are not covered.',
-  },
-  {
     key: 'CROSSAREA',
     aliases: ['SECTIONAREA'],
     label: 'CROSSAREA / SECTIONAREA',

@@ -62,7 +62,7 @@ describe('faceMatchesLayer', () => {
   it('filters legend layers', () => {
     expect(faceMatchesLayer(face('top'), 'top')).toBe(true)
     expect(faceMatchesLayer(face('top'), 'lateral')).toBe(false)
-    expect(faceMatchesLayer(face('lateral', 1), 'contact')).toBe(true)
+    expect(faceMatchesLayer(face('lateral', 1), 'lateral')).toBe(true)
     expect(faceMatchesLayer(face('lateral'), 'all')).toBe(true)
   })
 })

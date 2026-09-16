@@ -175,31 +175,27 @@ function AggregateCard({ rows, selectedCount }: { rows: ElementQuantity[]; selec
     UNDERAREA: 0,
     TOPAREA: 0,
     GROSSAREA: 0,
-    COVEREDAREA: 0,
-    UNCOVEREDAREA: 0,
     VOLUME: 0,
     LENGTH: 0,
     WIDTH: 0,
     HEIGHT: 0,
     COUNT: 0,
   }
-  const byType = new Map<string, { count: number; lateral: number; net: number }>()
+  const byType = new Map<string, { count: number; lateral: number; gross: number }>()
   for (const element of rows) {
     totals.LATERALAREA += element.metrics.LATERALAREA
     totals.UNDERAREA += element.metrics.UNDERAREA
     totals.TOPAREA += element.metrics.TOPAREA
     totals.GROSSAREA += element.metrics.GROSSAREA
-    totals.COVEREDAREA += element.metrics.COVEREDAREA
-    totals.UNCOVEREDAREA += element.metrics.UNCOVEREDAREA
     totals.VOLUME += element.metrics.VOLUME
     totals.LENGTH += element.metrics.LENGTH
     totals.WIDTH += element.metrics.WIDTH
     totals.HEIGHT += element.metrics.HEIGHT
     totals.COUNT += element.metrics.COUNT
-    const row = byType.get(element.ifcType) ?? { count: 0, lateral: 0, net: 0 }
+    const row = byType.get(element.ifcType) ?? { count: 0, lateral: 0, gross: 0 }
     row.count += 1
     row.lateral += element.metrics.LATERALAREA
-    row.net += element.metrics.UNCOVEREDAREA
+    row.gross += element.metrics.GROSSAREA
     byType.set(element.ifcType, row)
   }
 
@@ -220,8 +216,6 @@ function AggregateCard({ rows, selectedCount }: { rows: ElementQuantity[]; selec
           <Row label="LATERALAREA" value={formatArea(totals.LATERALAREA)} />
           <Row label="TOPAREA" value={formatArea(totals.TOPAREA)} />
           <Row label="UNDERAREA" value={formatArea(totals.UNDERAREA)} />
-          <Row label="COVEREDAREA" value={formatArea(totals.COVEREDAREA)} />
-          <Row label="UNCOVEREDAREA" value={formatArea(totals.UNCOVEREDAREA)} />
         </div>
       </section>
       {byType.size > 0 ? (
@@ -237,7 +231,7 @@ function AggregateCard({ rows, selectedCount }: { rows: ElementQuantity[]; selec
                     <span className="font-mono text-[11px] text-muted-foreground">{formatCount(row.count)}</span>
                   </div>
                   <div className="text-[11px] text-muted-foreground">
-                    lateral {formatArea(row.lateral)} · net {formatArea(row.net)}
+                    lateral {formatArea(row.lateral)} · gross {formatArea(row.gross)}
                   </div>
                 </div>
               ))}
@@ -307,25 +301,16 @@ function SelectedElement({
               </span>
               <span className="font-mono text-[11px] text-muted-foreground">{face.faceId}</span>
             </div>
-            <div className="mt-1 grid grid-cols-3 gap-2 text-[11px]">
+            <div className="mt-1 grid grid-cols-2 gap-2 text-[11px]">
               <div>
-                <div className="text-muted-foreground">Gross</div>
+                <div className="text-muted-foreground">Area</div>
                 <div className="font-medium">{formatArea(face.grossArea)}</div>
               </div>
               <div>
-                <div className="text-muted-foreground">Covered</div>
-                <div className="font-medium">{formatArea(face.overlapArea)}</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">Net</div>
-                <div className="font-medium">{formatArea(face.netArea)}</div>
+                <div className="text-muted-foreground">Kind</div>
+                <div className={`font-medium ${kindClass(face.kind)}`}>{face.kind}</div>
               </div>
             </div>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              {face.overlappingIds.length === 0
-                ? 'No contacting faces'
-                : `Contact #${face.overlappingIds.join(', #')}`}
-            </p>
           </button>
         ))}
       </div>

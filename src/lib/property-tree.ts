@@ -45,6 +45,61 @@ export function propertyRefLabel(ref: PropertyRef): string {
   return ref.kind === 'attribute' ? ref.name : `${ref.set}.${ref.name}`
 }
 
+export const MAX_FILTER_RULES = 3
+
+export function isIfcTypeRef(ref: PropertyRef): boolean {
+  return ref.kind === 'attribute' && ref.name === 'IFC Type'
+}
+
+export function filterRulesNeedParse(rules: PropertyRef[]): boolean {
+  return rules.some((rule) => !isIfcTypeRef(rule))
+}
+
+export function addFilterRule(rules: PropertyRef[], ref: PropertyRef): PropertyRef[] {
+  if (rules.some((rule) => samePropertyRef(rule, ref))) return rules
+  if (rules.length >= MAX_FILTER_RULES) return rules
+  return [...rules, ref]
+}
+
+export function removeFilterRule(rules: PropertyRef[], ref: PropertyRef): PropertyRef[] {
+  return rules.filter((rule) => !samePropertyRef(rule, ref))
+}
+
+/** Move a rule to `toIndex`. The nested value tree follows this order. */
+export function moveFilterRule(rules: PropertyRef[], fromIndex: number, toIndex: number): PropertyRef[] {
+  if (fromIndex === toIndex) return rules
+  if (fromIndex < 0 || fromIndex >= rules.length) return rules
+  if (toIndex < 0 || toIndex >= rules.length) return rules
+  const next = [...rules]
+  const [item] = next.splice(fromIndex, 1)
+  next.splice(toIndex, 0, item)
+  return next
+}
+
+/** Clicking an already-used property makes it the top grouping; others keep order. */
+export function promoteFilterRule(rules: PropertyRef[], ref: PropertyRef): PropertyRef[] {
+  const fromIndex = rules.findIndex((rule) => samePropertyRef(rule, ref))
+  if (fromIndex <= 0) return rules
+  return moveFilterRule(rules, fromIndex, 0)
+}
+
+export function parsePropertyRefs(value: unknown): PropertyRef[] {
+  if (!Array.isArray(value)) return []
+  const rows: PropertyRef[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const row = item as { set?: unknown; name?: unknown; kind?: unknown }
+    const set = typeof row.set === 'string' ? row.set : ''
+    const name = typeof row.name === 'string' ? row.name.trim() : ''
+    const kind = row.kind
+    if (!name) continue
+    if (kind !== 'property' && kind !== 'quantity' && kind !== 'attribute') continue
+    rows.push({ set, name, kind })
+    if (rows.length >= MAX_FILTER_RULES) break
+  }
+  return rows
+}
+
 export function exactValueLabel(value: string | null | undefined, numeric: number | null | undefined): string {
   if (value != null && value !== '') return value
   if (numeric != null && Number.isFinite(numeric)) return String(numeric)
@@ -93,6 +148,34 @@ export function findPropertyNode(nodes: PropertyTreeNode[], key: string | null):
     if (nested) return nested
   }
   return null
+}
+
+export function toggleFilterKeys(current: string[], key: string, additive: boolean): string[] {
+  if (!additive) return [key]
+  if (current.includes(key)) return current.filter((item) => item !== key)
+  return [...current, key]
+}
+
+export function unionPropertyNodeIds(nodes: PropertyTreeNode[], keys: string[]): number[] {
+  const ids = new Set<number>()
+  for (const key of keys) {
+    const node = findPropertyNode(nodes, key)
+    if (!node) continue
+    for (const id of node.ids) ids.add(id)
+  }
+  return [...ids]
+}
+
+export function propertySelectionLabel(nodes: PropertyTreeNode[], keys: string[], ruleName?: string): string | null {
+  const labels: string[] = []
+  for (const key of keys) {
+    const node = findPropertyNode(nodes, key)
+    if (node) labels.push(node.label)
+  }
+  if (labels.length === 0) return null
+  const joined =
+    labels.length <= 3 ? labels.join(' + ') : `${labels.slice(0, 2).join(' + ')} + ${labels.length - 2} more`
+  return ruleName ? `${ruleName}: ${joined}` : joined
 }
 
 export function colorizeLeaves(nodes: PropertyTreeNode[]): PropertyTreeNode[] {

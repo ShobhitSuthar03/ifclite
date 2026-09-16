@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { openBimDatabase, closeBimDatabase, run } from '@/lib/bim-sql/database'
-import { insertElementRecords } from '@/lib/bim-sql/ingest'
+import { openBimDatabase, closeBimDatabase, run, all } from '@/lib/bim-sql/database'
+import { insertElementRecords, isWarehouseElementType } from '@/lib/bim-sql/ingest'
 import { spatialTreeFromWarehouse, entityDataFromWarehouse } from '@/lib/bim-sql/restore'
 import { loadFilterOptions, queryElementIds, runReport } from '@/lib/bim-sql/queries'
+import { applyMutationPatchToWarehouse, applyMutationPatchesToWarehouse } from '@/lib/bim-sql/mutate'
 import { reportToCsv } from '@/lib/bim-sql/export'
-import type { ElementRecord } from '@/lib/bim-sql/types'
+import { EMPTY_REPORT_FILTER, type ElementRecord } from '@/lib/bim-sql/types'
+import { buildWarehousePropertyTree } from '@/lib/bim-sql/property-tree'
+import { EMPTY_QUERY } from '@/lib/ifc-query'
 
 function record(partial: Partial<ElementRecord> & { expressId: number }): ElementRecord {
   return {
@@ -144,5 +147,76 @@ describe('bim sql warehouse', () => {
     } finally {
       closeBimDatabase(db)
     }
+  })
+
+  it('writes property edits into warehouse rows used by reports and filters', async () => {
+    const db = await openBimDatabase()
+    try {
+      insertElementRecords(db, 1, [
+        record({
+          expressId: 1,
+          name: 'Wall A',
+          costCode: 'C-01',
+          status: 'Planned',
+          properties: [
+            { pset: 'Pset_WallCommon', name: 'FireRating', value: 'REI60', numeric: null },
+            { pset: 'Pset_Cost', name: 'CostCode', value: 'C-01', numeric: null },
+          ],
+        }),
+      ])
+      applyMutationPatchesToWarehouse(db, [
+        { expressId: 1, kind: 'attribute', name: 'Name', value: 'Wall B' },
+        { expressId: 1, kind: 'property', pset: 'Pset_Cost', name: 'CostCode', value: 'C-99' },
+        { expressId: 1, kind: 'property', pset: 'Pset_WallCommon', name: 'FireRating', value: 'REI120' },
+        { expressId: 1, kind: 'property', pset: 'Pset_WallCommon', name: 'IsExternal', value: 'true' },
+      ])
+      const row = all<{ name: string; cost_code: string; fire_rating: string }>(
+        db,
+        'SELECT name, cost_code, fire_rating FROM elements WHERE express_id = 1',
+      )[0]
+      expect(row.name).toBe('Wall B')
+      expect(row.cost_code).toBe('C-99')
+      expect(row.fire_rating).toBe('REI120')
+      const inserted = all<{ value: string }>(
+        db,
+        `SELECT value FROM element_properties WHERE express_id = 1 AND pset = 'Pset_WallCommon' AND name = 'IsExternal'`,
+      )[0]
+      expect(inserted.value).toBe('true')
+
+      const cost = runReport(db, 'cost', EMPTY_REPORT_FILTER, 'cost_code', [], null)
+      expect(cost.rows.find((item) => item.key === 'C-99')?.values.count).toBe(1)
+      expect(cost.rows.find((item) => item.key === 'C-01')).toBeUndefined()
+
+      const names = buildWarehousePropertyTree(
+        db,
+        [{ set: 'Attributes', name: 'Name', kind: 'attribute' }],
+        EMPTY_QUERY,
+      )
+      expect(names.map((node) => node.label)).toEqual(['Wall B'])
+    } finally {
+      closeBimDatabase(db)
+    }
+  })
+
+  it('skips patches for elements that are not in the warehouse', async () => {
+    const db = await openBimDatabase()
+    try {
+      expect(
+        applyMutationPatchToWarehouse(db, { expressId: 99, kind: 'attribute', name: 'Name', value: 'Ghost' }),
+      ).toBe(false)
+    } finally {
+      closeBimDatabase(db)
+    }
+  })
+
+  it('counts model products, not tessellation primitives', () => {
+    expect(isWarehouseElementType('IfcWall')).toBe(true)
+    expect(isWarehouseElementType('IfcSlab')).toBe(true)
+    expect(isWarehouseElementType('IfcBuildingElementProxy')).toBe(true)
+    expect(isWarehouseElementType('IfcIndexedPolygonalFace')).toBe(false)
+    expect(isWarehouseElementType('IfcTriangulatedFaceSet')).toBe(false)
+    expect(isWarehouseElementType('IfcExtrudedAreaSolid')).toBe(false)
+    expect(isWarehouseElementType('IfcCartesianPoint')).toBe(false)
+    expect(isWarehouseElementType('IfcMappedItem')).toBe(false)
   })
 })

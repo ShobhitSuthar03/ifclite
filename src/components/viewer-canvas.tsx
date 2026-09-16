@@ -26,6 +26,14 @@ import { VIEWPORT_THEME, type Theme } from '@/lib/theme'
 
 const DRAG_THRESHOLD_PX = 4
 
+function packedLook(hidden: boolean, selected: boolean, hovered: boolean, ghost: boolean): number {
+  if (hidden) return ELEMENT_HIDDEN
+  if (selected) return ELEMENT_SELECTED
+  if (hovered) return ELEMENT_HOVER
+  if (ghost) return ELEMENT_GHOST
+  return ELEMENT_SOLID
+}
+
 type ViewerCanvasProps = {
   geometry: ViewerMeshStore
   geometryComplete: boolean
@@ -115,6 +123,7 @@ export const ViewerCanvas = memo(function ViewerCanvas({
   const hiddenRef = useRef<Set<number>>(new Set())
   const ghostRef = useRef<Set<number>>(new Set())
   const viewIsolateRef = useRef<Set<number> | null>(null)
+  const overlayIdsRef = useRef<Set<number> | null>(null)
   const geometryCompleteRef = useRef(geometryComplete)
   const onSelectRef = useRef(onSelect)
   const onHoverRef = useRef(onHover)
@@ -251,9 +260,19 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     let hoverRaf = 0
     let lastHoverAt = 0
 
-    const setElementLook = (id: number | null, state: number) => {
+    const lookOf = (id: number, hoveredId: number | null) => {
+      const overlayOn = overlayIdsRef.current != null && overlayIdsRef.current.has(id)
+      const hidden =
+        hiddenRef.current.has(id) || (viewIsolateRef.current != null && !viewIsolateRef.current.has(id))
+      const ghost =
+        !hidden && (ghostRef.current.has(id) || overlayOn || (isolatedRef.current != null && !isolatedRef.current.has(id)))
+      const selected = selectedIdsRef.current.has(id) && !overlayOn
+      return packedLook(hidden, selected, hoveredId === id && !selected, ghost)
+    }
+
+    const setElementLook = (id: number | null, hoveredId: number | null) => {
       if (id == null) return
-      batcher.setElementState(id, state)
+      batcher.setElementState(id, lookOf(id, hoveredId))
       requestRender()
     }
 
@@ -342,13 +361,9 @@ export const ViewerCanvas = memo(function ViewerCanvas({
         const id = pickAt(cx, cy)?.expressId ?? null
         canvas.classList.toggle('hovering', id != null)
         if (id === hoveredRef.current) return
-        if (hoveredRef.current != null && !selectedIdsRef.current.has(hoveredRef.current)) {
-          setElementLook(hoveredRef.current, ELEMENT_SOLID)
-        }
+        if (hoveredRef.current != null) setElementLook(hoveredRef.current, null)
         hoveredRef.current = id
-        if (id != null && !selectedIdsRef.current.has(id)) {
-          setElementLook(id, ELEMENT_HOVER)
-        }
+        if (id != null) setElementLook(id, id)
         onHoverRef.current?.(id)
       })
     }
@@ -359,9 +374,7 @@ export const ViewerCanvas = memo(function ViewerCanvas({
 
     const onPointerLeave = () => {
       canvas.classList.remove('dragging', 'hovering')
-      if (hoveredRef.current != null && !selectedIdsRef.current.has(hoveredRef.current)) {
-        setElementLook(hoveredRef.current, ELEMENT_SOLID)
-      }
+      if (hoveredRef.current != null) setElementLook(hoveredRef.current, null)
       hoveredRef.current = null
       onHoverRef.current?.(null)
     }
@@ -467,21 +480,17 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     hiddenRef.current = hiddenIds
     ghostRef.current = ghostIds
     viewIsolateRef.current = viewIsolateIds
+    overlayIdsRef.current = overlayIds
     const batcher = batcherRef.current
     if (!batcher) return
     for (const id of geometry.ids()) {
       const overlayOn = overlayIds != null && overlayIds.has(id)
       const hidden = hiddenIds.has(id) || (viewIsolateIds != null && !viewIsolateIds.has(id))
-      const ghost = !hidden && (ghostIds.has(id) || overlayOn)
-      const dim = !hidden && !ghost && isolatedIds != null && !isolatedIds.has(id)
+      const ghost =
+        !hidden && (ghostIds.has(id) || overlayOn || (isolatedIds != null && !isolatedIds.has(id)))
       const selected = selectedIds.has(id) && !overlayOn
       const hovered = hoveredRef.current === id && !selected
-      let state = ELEMENT_SOLID
-      if (hidden) state = ELEMENT_HIDDEN
-      else if (ghost || dim) state = ELEMENT_GHOST
-      else if (selected) state = ELEMENT_SELECTED
-      else if (hovered) state = ELEMENT_HOVER
-      batcher.setElementState(id, state)
+      batcher.setElementState(id, packedLook(hidden, selected, hovered, ghost))
       const override = colorOverrides?.get(id)
       batcher.setElementColor(id, override ? [override[0], override[1], override[2]] : null)
     }

@@ -1,6 +1,6 @@
 import { BarChart3 } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { cn } from '@/lib/utils'
+import { cn, formatCount } from '@/lib/utils'
 import {
   GROUP_BY_OPTIONS,
   METRIC_OPTIONS,
@@ -15,6 +15,7 @@ import {
 type ReportsPanelProps = {
   ready: boolean
   busy: boolean
+  progress?: { done: number; total: number } | null
   template: ReportTemplate
   groupBy: GroupByField
   metrics: MetricField[]
@@ -34,6 +35,7 @@ const fieldClass =
 export function ReportsPanel({
   ready,
   busy,
+  progress,
   template,
   groupBy,
   metrics,
@@ -53,18 +55,37 @@ export function ReportsPanel({
         <div className="min-w-0">
           <p className="text-[13px] font-semibold">Reports</p>
           <p className="text-[11px] text-muted-foreground">
-            SQL aggregations over elements, quantities, cost codes, and 4D status. Click a chart or table row to isolate
-            those GUIDs in 3D.
+            Pick a template when you want a report. Building it does not freeze 3D.
           </p>
         </div>
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-3 p-3">
-          {!ready ? (
-            <p className="text-xs text-muted-foreground italic">
-              {busy ? 'Building the reporting warehouse…' : 'Load an IFC model to query the BIM tables.'}
-            </p>
-          ) : null}
+          {busy ? (
+            <div className="rounded border border-border bg-muted/40 p-2">
+              <p className="text-xs font-medium text-foreground">Creating report…</p>
+              <p className="text-[11px] text-muted-foreground">
+                {progress && progress.total > 0
+                  ? `${formatCount(progress.done)} / ${formatCount(progress.total)} elements`
+                  : 'Starting the warehouse…'}
+              </p>
+              <div className="mt-1.5 h-1.5 overflow-hidden rounded bg-background">
+                <div
+                  className="h-full bg-primary transition-[width] duration-150"
+                  style={{
+                    width:
+                      progress && progress.total > 0
+                        ? `${Math.max(4, Math.round((100 * progress.done) / progress.total))}%`
+                        : '12%',
+                  }}
+                />
+              </div>
+            </div>
+          ) : !ready ? (
+            <p className="text-xs text-muted-foreground italic">Load an IFC model to create a report.</p>
+          ) : (
+            <p className="text-xs text-muted-foreground italic">Pick a template to create the report.</p>
+          )}
           <section>
             <p className="mb-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">Templates</p>
             <div className="space-y-1">
@@ -72,7 +93,7 @@ export function ReportsPanel({
                 <button
                   key={item.id}
                   type="button"
-                  disabled={!ready}
+                  disabled={!ready || busy}
                   className={cn(
                     'w-full rounded px-2 py-1.5 text-left hover:bg-accent disabled:opacity-40',
                     template === item.id && 'bg-primary/15',

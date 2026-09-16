@@ -11,9 +11,9 @@ export type IfcExportResult = {
 
 /**
  * Bakes the mutation overlay (property/attribute edits - including anything
- * registered from the manual takeoff face basket) back into a full, complete IFC
- * file - geometry, relationships, and everything else round-trip from the
- * original source unchanged; only the mutated entities are rewritten.
+ * registered from the manual takeoff face basket) back into an IFC file.
+ * Pass `isolatedEntityIds` to write only that selection (plus spatial
+ * infrastructure) — used by saved views.
  *
  * NOT `exporter.exportPropertiesOnly()`: despite the name, that produces a
  * lightweight DELTA file containing only the changed property/quantity data (a
@@ -23,8 +23,11 @@ export type IfcExportResult = {
 export function exportIfcWithMutations(
   store: IfcDataStore,
   mutationView: MutablePropertyView | null,
+  isolatedEntityIds?: ReadonlySet<number> | null,
 ): IfcExportResult {
   const exporter = new StepExporter(store, mutationView ?? undefined)
+  const isolated =
+    isolatedEntityIds && isolatedEntityIds.size > 0 ? new Set(isolatedEntityIds) : null
   const result: StepExportResult = exporter.export({
     schema: store.schemaVersion,
     includeGeometry: true,
@@ -32,6 +35,13 @@ export function exportIfcWithMutations(
     includeQuantities: true,
     includeRelationships: true,
     applyMutations: true,
+    ...(isolated
+      ? {
+          visibleOnly: true,
+          hiddenEntityIds: new Set<number>(),
+          isolatedEntityIds: isolated,
+        }
+      : {}),
   })
   return {
     content: result.content,

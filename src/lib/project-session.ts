@@ -12,6 +12,8 @@ import type {
 import { EMPTY_QUERY } from '@/lib/ifc-query'
 import { EMPTY_REPORT_FILTER } from '@/lib/bim-sql'
 import type { QuantityResult } from '@/lib/geometry-qto'
+import { parsePropertyRefs, type PropertyRef } from '@/lib/property-tree'
+import { parseSavedViews, type SavedView } from '@/lib/saved-views'
 
 export type MutationPatch = {
   expressId: number
@@ -34,6 +36,7 @@ export type ProjectSession = {
   rightTab: RightTab
   spec: QuerySpec
   breakdownMode: BreakdownMode
+  filterRules: PropertyRef[]
   reportTemplate: ReportTemplate
   reportGroupBy: GroupByField
   reportMetrics: MetricField[]
@@ -41,6 +44,7 @@ export type ProjectSession = {
   followViewer: boolean
   mutations: MutationPatch[]
   quantities: QuantityResult | null
+  savedViews: SavedView[]
 }
 
 export function emptySession(cacheKey = '', fileName = ''): ProjectSession {
@@ -57,6 +61,7 @@ export function emptySession(cacheKey = '', fileName = ''): ProjectSession {
     rightTab: 'properties',
     spec: EMPTY_QUERY,
     breakdownMode: 'type',
+    filterRules: [],
     reportTemplate: 'qto',
     reportGroupBy: 'category',
     reportMetrics: ['count', 'volume', 'area', 'cost'],
@@ -64,6 +69,7 @@ export function emptySession(cacheKey = '', fileName = ''): ProjectSession {
     followViewer: true,
     mutations: [],
     quantities: null,
+    savedViews: [],
   }
 }
 
@@ -84,7 +90,19 @@ export function parseSessionJson(json: string | null | undefined): ProjectSessio
   try {
     const parsed = JSON.parse(json) as ProjectSession
     if (parsed?.version !== 1) return null
-    return parsed
+    const rawTab = parsed.leftTab as string
+    const leftTab =
+      rawTab === 'breakdown' || rawTab === 'lens'
+        ? 'filters'
+        : rawTab === 'tree' || rawTab === 'filters' || rawTab === 'reports' || rawTab === 'views'
+          ? rawTab
+          : 'tree'
+    return {
+      ...parsed,
+      leftTab,
+      filterRules: parsePropertyRefs(parsed.filterRules),
+      savedViews: parseSavedViews((parsed as { savedViews?: unknown }).savedViews),
+    }
   } catch {
     return null
   }

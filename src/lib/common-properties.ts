@@ -6,6 +6,7 @@ export type CommonPropertyRow = {
   value: string
   mixed: boolean
   summed: boolean
+  kind: 'attribute' | 'property' | 'quantity'
 }
 
 function parseNumeric(value: string): number | null {
@@ -44,7 +45,7 @@ export function commonProperties(entities: EntityData[]): CommonPropertyRow[] {
   ]
   for (const attr of attributes) {
     const summary = summarizeValues(entities.map(attr.pick), { allowSum: false })
-    rows.push({ group: 'Attributes', name: attr.name, ...summary })
+    rows.push({ group: 'Attributes', name: attr.name, kind: 'attribute', ...summary })
   }
 
   const psetKeys = new Map<string, { group: string; name: string }>()
@@ -63,7 +64,7 @@ export function commonProperties(entities: EntityData[]): CommonPropertyRow[] {
     if (values.every((item) => item === '—')) continue
     const shared = values.filter((item) => item !== '—').length
     if (shared < entities.length && shared < 2) continue
-    rows.push({ group: meta.group, name: meta.name, ...summarizeValues(values) })
+    rows.push({ group: meta.group, name: meta.name, kind: 'property', ...summarizeValues(values) })
   }
 
   const qsetKeys = new Map<string, { group: string; name: string }>()
@@ -80,7 +81,7 @@ export function commonProperties(entities: EntityData[]): CommonPropertyRow[] {
       return set?.quantities.find((item) => item.name === meta.name)?.value ?? '—'
     })
     if (values.every((item) => item === '—')) continue
-    rows.push({ group: meta.group, name: meta.name, ...summarizeValues(values) })
+    rows.push({ group: meta.group, name: meta.name, kind: 'quantity', ...summarizeValues(values) })
   }
   return rows
 }

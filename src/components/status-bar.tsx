@@ -19,6 +19,8 @@ type StatusBarProps = {
   quantityBusy: boolean
   surfacesReady: boolean
   quantitySummary: string | null
+  reportBusy?: boolean
+  reportProgress?: { done: number; total: number } | null
   onOpenQuantities: () => void
 }
 
@@ -58,6 +60,8 @@ export function StatusBar({
   quantityBusy,
   surfacesReady,
   quantitySummary,
+  reportBusy = false,
+  reportProgress = null,
   onOpenQuantities,
 }: StatusBarProps) {
         const processed = progress?.processed ?? result?.totalMeshes ?? 0
@@ -79,6 +83,14 @@ export function StatusBar({
             </span>
             {isolatedCount != null && <span>{formatCount(isolatedCount)} isolated</span>}
             {parsing ? <span>Still reading properties…</span> : null}
+            {reportBusy ? (
+              <span className="truncate text-foreground">
+                Creating report
+                {reportProgress && reportProgress.total > 0
+                  ? ` · ${formatCount(reportProgress.done)} / ${formatCount(reportProgress.total)}`
+                  : '…'}
+              </span>
+            ) : null}
             {exportMessage && <span className="truncate">{exportMessage}</span>}
             {quantityBusy ? (
               <span className="truncate text-foreground">{quantitySummary ?? 'Calculating surfaces…'}</span>

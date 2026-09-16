@@ -6,7 +6,8 @@ export {
   closeBimDatabase,
   type BimDatabase,
 } from '@/lib/bim-sql/database'
-export { ingestWarehouse, insertElementRecords, applyGeometryQuantities, collectElementRecords } from '@/lib/bim-sql/ingest'
+export { ingestWarehouse, insertElementRecords, applyGeometryQuantities, collectElementRecords, collectElementRecordsRange, listWarehouseElementIds, startWarehouseIngest, WAREHOUSE_INGEST_CHUNK } from '@/lib/bim-sql/ingest'
+export { applyMutationPatchToWarehouse, applyMutationPatchesToWarehouse } from '@/lib/bim-sql/mutate'
 export {
   spatialTreeFromWarehouse,
   entityDataFromWarehouse,

@@ -7,6 +7,7 @@ import type { ReportResult, ReportRow } from '@/lib/bim-sql'
 type DashboardPanelProps = {
   result: ReportResult | null
   busy: boolean
+  progress?: { done: number; total: number } | null
   followViewer: boolean
   chartMetric: string
   onRowClick: (row: ReportRow) => void
@@ -16,13 +17,31 @@ type DashboardPanelProps = {
 export function DashboardPanel({
   result,
   busy,
+  progress,
   followViewer,
   chartMetric,
   onRowClick,
   onExport,
 }: DashboardPanelProps) {
   if (busy) {
-    return <p className="px-3 py-6 text-xs text-muted-foreground">Querying the BIM warehouse…</p>
+    const ratio = progress && progress.total > 0 ? Math.round((100 * progress.done) / progress.total) : 0
+    return (
+      <div className="space-y-2 px-3 py-6">
+        <p className="text-xs font-medium text-foreground">Creating report…</p>
+        <p className="text-[11px] text-muted-foreground">
+          {progress && progress.total > 0
+            ? `${formatCount(progress.done)} / ${formatCount(progress.total)} elements`
+            : 'Starting the warehouse…'}
+        </p>
+        <div className="h-1.5 overflow-hidden rounded bg-muted">
+          <div
+            className="h-full bg-primary transition-[width] duration-150"
+            style={{ width: progress && progress.total > 0 ? `${Math.max(4, ratio)}%` : '12%' }}
+          />
+        </div>
+        <p className="text-[10px] text-muted-foreground">3D stays interactive while the report builds.</p>
+      </div>
+    )
   }
   if (!result) {
     return (

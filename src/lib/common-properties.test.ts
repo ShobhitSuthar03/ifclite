@@ -35,7 +35,7 @@ describe('commonProperties', () => {
     expect(selectionTypeLabel([entity({ expressId: 1 }), entity({ expressId: 2 })])).toBe('IfcWall')
     expect(rows.find((row) => row.name === 'Name')).toMatchObject({ value: 'mixed', mixed: true, summed: false })
     expect(rows.find((row) => row.name === 'Length')).toMatchObject({ value: '10.000', summed: true })
-    expect(rows.find((row) => row.name === 'IsExternal')?.mixed).toBe(true)
+    expect(rows.find((row) => row.name === 'IsExternal')).toMatchObject({ mixed: true, kind: 'property' })
     const wallsNamed = commonProperties([
       entity({ expressId: 1, name: 'Wall1' }),
       entity({ expressId: 2, name: 'Wall2' }),

@@ -4,7 +4,6 @@ import { computeColumnFormwork, computeElementQuantities, hydrateFacePositions }
 import { isBuildingElementType } from '@/lib/geometry-qto/faces'
 import { meshesForQuantityJob, typeQtoMeshes } from '@/lib/geometry-qto/job'
 import { runWholeModelQuantities } from '@/lib/geometry-qto/run-qto'
-import { DEFAULT_CONTACT_GAP } from '@/lib/geometry-qto/types'
 import { describe, expect, it } from 'vitest'
 
 function almost(value: number, expected: number, eps = 1e-6) {
@@ -121,43 +120,24 @@ describe('computeElementQuantities', () => {
     almost(slabM!.FOOTPRINTAREA, 4 * 5)
   })
 
-  it('subtracts shared contact from both a column and a flush wall', () => {
+  it('does not subtract covered/contact area from neighboring elements', () => {
     const column = boxMesh(10, 'IfcColumn', [0, 0, 0], [0.4, 3, 0.4])
     const wall = boxMesh(20, 'IfcWall', [0.4, 0, 0], [0.6, 3, 0.4])
     const result = computeElementQuantities([column, wall])
     const col = result.elements.find((item) => item.expressId === 10)!
-    const shared = 0.4 * 3
-    almost(col.metrics.COVEREDAREA, shared)
-    almost(col.metrics.UNCOVEREDAREA, 5.12 - shared)
+    almost(col.metrics.COVEREDAREA, 0)
+    almost(col.metrics.UNCOVEREDAREA, 5.12)
     almost(col.metrics.LATERALAREA, 4.8)
-    const hit = col.faces.find((face) => face.overlapArea > 1e-6)
-    expect(hit?.overlappingIds).toEqual([20])
+    almost(col.metrics.GROSSAREA, 5.12)
+    expect(col.faces.every((face) => face.overlapArea === 0)).toBe(true)
   })
 
-  it('does not subtract when the gap is larger than the contact epsilon', () => {
-    const column = boxMesh(10, 'IfcColumn', [0, 0, 0], [0.4, 3, 0.4])
-    const wall = boxMesh(20, 'IfcWall', [0.4 + 0.01, 0, 0], [0.6, 3, 0.4])
-    const result = computeElementQuantities([column, wall], { contactGap: DEFAULT_CONTACT_GAP })
-    almost(result.elements[0].metrics.COVEREDAREA, 0)
-  })
-
-  it('subtracts when the gap is within the contact epsilon', () => {
-    const column = boxMesh(10, 'IfcColumn', [0, 0, 0], [0.4, 3, 0.4])
-    const wall = boxMesh(20, 'IfcWall', [0.4 + 0.003, 0, 0], [0.6, 3, 0.4])
-    const result = computeElementQuantities([column, wall], { contactGap: DEFAULT_CONTACT_GAP })
-    almost(result.elements[0].metrics.COVEREDAREA, 0.4 * 3)
-  })
-
-  it('does not mark a slab edge covered just because a wall is flush with that elevation', () => {
+  it('does not treat a flush slab/wall pair as covered', () => {
     const slab = boxMesh(1, 'IfcSlab', [0, 0, 0], [4, 0.2, 5])
     const wall = boxMesh(2, 'IfcWall', [0, 0.2, 0], [4, 3.2, 0.2])
     const result = computeElementQuantities([slab, wall])
     const slabEl = result.elements.find((item) => item.expressId === 1)!
-    for (const face of slabEl.faces.filter((item) => item.kind === 'lateral')) {
-      almost(face.overlapArea, 0)
-    }
-    const top = slabEl.faces.find((item) => item.kind === 'top')!
-    almost(top.overlapArea, 4 * 0.2)
+    for (const face of slabEl.faces) almost(face.overlapArea, 0)
   })
 
   it('applies mesh origin when assembling world-space faces', () => {
@@ -166,9 +146,9 @@ describe('computeElementQuantities', () => {
       ...local,
       origin: [2, 0, 1] as [number, number, number],
     }
-    const wall = boxMesh(20, 'IfcWall', [2.4, 0, 1], [2.6, 3, 1.4])
-    const result = computeElementQuantities([shifted, wall])
-    almost(result.elements[0].metrics.COVEREDAREA, 0.4 * 3)
+    const result = computeElementQuantities([shifted])
+    almost(result.elements[0].metrics.LATERALAREA, 4.8)
+    almost(result.elements[0].metrics.VOLUME, 0.48)
   })
 })
 
@@ -183,18 +163,19 @@ describe('computeColumnFormwork', () => {
 })
 
 describe('on-demand selection takeoff', () => {
-  it('keeps the selected column and nearby wall for contact, but emits only the target', () => {
+  it('emits only the selected element', () => {
     const column = boxMesh(10, 'IfcColumn', [0, 0, 0], [0.4, 3, 0.4])
     const wall = boxMesh(20, 'IfcWall', [0.4, 0, 0], [0.6, 3, 0.4])
     const far = boxMesh(30, 'IfcWall', [20, 0, 20], [24, 3, 20.2])
     const subset = meshesForQuantityJob([column, wall, far], new Set([10]))
-    expect(subset.map((mesh) => mesh.expressId).sort((a, b) => a - b)).toEqual([10, 20])
+    expect(subset.map((mesh) => mesh.expressId)).toEqual([10])
     const result = computeElementQuantities(subset, {
       targetIds: new Set([10]),
       keepPositionsFor: new Set([10]),
     })
     expect(result.elements.map((item) => item.expressId)).toEqual([10])
-    almost(result.elements[0].metrics.COVEREDAREA, 0.4 * 3)
+    almost(result.elements[0].metrics.COVEREDAREA, 0)
+    almost(result.elements[0].metrics.GROSSAREA, 5.12)
     expect(result.elements[0].faces[0].positions.length).toBeGreaterThan(0)
   })
 })
