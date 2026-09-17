@@ -124,3 +124,60 @@ export function usePanelWidths() {
     resetEstimation,
   }
 }
+
+export type EstimationPaneId = 'boq' | 'buildup' | 'chat'
+
+export type EstimationPanes = {
+  boq: boolean
+  buildup: boolean
+  chat: boolean
+}
+
+const ESTIMATION_PANES_KEY = 'ifclite.estimationPanes'
+const DEFAULT_ESTIMATION_PANES: EstimationPanes = { boq: true, buildup: true, chat: true }
+
+function readEstimationPanes(): EstimationPanes {
+  try {
+    const raw = localStorage.getItem(ESTIMATION_PANES_KEY)
+    if (!raw) return { ...DEFAULT_ESTIMATION_PANES }
+    const parsed = JSON.parse(raw) as Partial<EstimationPanes>
+    return {
+      boq: parsed.boq !== false,
+      buildup: parsed.buildup !== false,
+      chat: parsed.chat !== false,
+    }
+  } catch {
+    return { ...DEFAULT_ESTIMATION_PANES }
+  }
+}
+
+function writeEstimationPanes(value: EstimationPanes) {
+  try {
+    localStorage.setItem(ESTIMATION_PANES_KEY, JSON.stringify(value))
+  } catch {
+    /* private mode */
+  }
+}
+
+export function useEstimationPanes() {
+  const [panes, setPanes] = useState<EstimationPanes>(readEstimationPanes)
+
+  const setPane = useCallback((id: EstimationPaneId, open: boolean) => {
+    setPanes((current) => {
+      const next = { ...current, [id]: open }
+      writeEstimationPanes(next)
+      return next
+    })
+  }, [])
+
+  const togglePane = useCallback((id: EstimationPaneId) => {
+    setPanes((current) => {
+      const next = { ...current, [id]: !current[id] }
+      writeEstimationPanes(next)
+      return next
+    })
+  }, [])
+
+  return { panes, setPane, togglePane }
+}
+

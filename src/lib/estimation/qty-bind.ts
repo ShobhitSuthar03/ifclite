@@ -1,5 +1,7 @@
 import type { BuildUpRow } from '@/lib/cost-assembly/build-up'
+import type { CostKind } from '@/lib/cost-assembly/types'
 import type { AreaMetrics, QuantityResult } from '@/lib/geometry-qto'
+import { quantityForIds } from '@/lib/estimation/qty'
 import { propertyRefKey, type PropertyRef } from '@/lib/property-tree'
 
 export type QtyBinding =
@@ -12,6 +14,7 @@ export const TAKEOFF_QTY_FIELDS: Array<{ field: keyof AreaMetrics; label: string
   { field: 'VOLUME', label: 'Volume', unit: 'm³' },
   { field: 'LATERALAREA', label: 'Lateral area', unit: 'm²' },
   { field: 'GROSSAREA', label: 'Gross area', unit: 'm²' },
+  { field: 'AREAMAX', label: 'Max area', unit: 'm²' },
   { field: 'UNDERAREA', label: 'Soffit area', unit: 'm²' },
   { field: 'TOPAREA', label: 'Top area', unit: 'm²' },
   { field: 'FOOTPRINTAREA', label: 'Footprint', unit: 'm²' },
@@ -152,6 +155,86 @@ export function measuredLineQty(
 export function computedLineAmount(row: BuildUpRow, qty: number): number {
   if (row.hasChildren || row.rate == null) return 0
   return qty * row.factor * row.extraFactors * row.rate
+}
+
+export type ElementBuildUpLine = {
+  rowId: string
+  code: string
+  description: string
+  kind: CostKind | 'group'
+  qty: number
+  unit: string
+  amount: number
+  takeoffField: keyof AreaMetrics | null
+}
+
+export type ElementBuildUp = {
+  expressId: number
+  lines: ElementBuildUpLine[]
+  total: number
+  volume: number
+  formwork: number
+  measured: boolean
+}
+
+export function elementBuildUps(input: {
+  rows: BuildUpRow[]
+  ids: number[]
+  assemblyId: string
+  assemblyUom: string
+  bindings: Record<string, QtyBinding>
+  excluded: Record<string, boolean>
+  quantities: QuantityResult | null
+  measureIfc?: (ids: number[], ref: PropertyRef) => number
+  shareCount?: number
+}): ElementBuildUp[] {
+  const { rows, ids, assemblyId, assemblyUom, bindings, excluded, quantities, measureIfc } = input
+  const leaves = rows.filter((row) => !row.hasChildren)
+  const share = Math.max(input.shareCount ?? ids.length, 1)
+  return ids.map((expressId) => {
+    const one = [expressId]
+    const assemblyQty = quantityForIds(one, assemblyUom, quantities).qty
+    const qto = quantities?.elements.find((item) => item.expressId === expressId) ?? null
+    const ctx: QtyMeasureContext = {
+      ids: one,
+      assemblyQty,
+      quantities,
+      measureIfc: (ref) => measureIfc?.(one, ref) ?? 0,
+    }
+    const lines: ElementBuildUpLine[] = []
+    let total = 0
+    let formwork = qto?.metrics.LATERALAREA ?? 0
+    for (const row of leaves) {
+      const binding = resolveQtyBinding(row, bindings[qtyBindingKey(assemblyId, row.id)])
+      const measured =
+        binding.mode === 'catalog'
+          ? { qty: (row.qty ?? 0) / share, unit: row.unit }
+          : measuredLineQty(row, binding, ctx)
+      const lineExcluded = Boolean(excluded[qtyBindingKey(assemblyId, row.id)])
+      const gross = computedLineAmount(row, measured.qty)
+      const amount = lineExcluded ? 0 : gross
+      if (binding.mode === 'takeoff' && binding.field === 'LATERALAREA') formwork = measured.qty
+      lines.push({
+        rowId: row.id,
+        code: row.code,
+        description: row.description,
+        kind: row.kind,
+        qty: measured.qty,
+        unit: measured.unit,
+        amount,
+        takeoffField: binding.mode === 'takeoff' ? binding.field : null,
+      })
+      total += amount
+    }
+    return {
+      expressId,
+      lines,
+      total,
+      volume: qto?.metrics.VOLUME ?? 0,
+      formwork,
+      measured: qto != null,
+    }
+  })
 }
 
 function isTakeoffField(value: string): value is keyof AreaMetrics {

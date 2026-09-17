@@ -83,18 +83,26 @@ export function promoteFilterRule(rules: PropertyRef[], ref: PropertyRef): Prope
   return moveFilterRule(rules, fromIndex, 0)
 }
 
+export function parsePropertyRef(value: unknown): PropertyRef | null {
+  if (!value || typeof value !== 'object') return null
+  const row = value as { set?: unknown; name?: unknown; kind?: unknown }
+  const set = typeof row.set === 'string' ? row.set : ''
+  const name = typeof row.name === 'string' ? row.name.trim() : ''
+  const kind = row.kind
+  if (!name) return null
+  if (kind !== 'property' && kind !== 'quantity' && kind !== 'attribute') return null
+  return { set, name, kind }
+}
+
 export function parsePropertyRefs(value: unknown): PropertyRef[] {
   if (!Array.isArray(value)) return []
   const rows: PropertyRef[] = []
   for (const item of value) {
     if (!item || typeof item !== 'object') continue
     const row = item as { set?: unknown; name?: unknown; kind?: unknown }
-    const set = typeof row.set === 'string' ? row.set : ''
-    const name = typeof row.name === 'string' ? row.name.trim() : ''
-    const kind = row.kind
-    if (!name) continue
-    if (kind !== 'property' && kind !== 'quantity' && kind !== 'attribute') continue
-    rows.push({ set, name, kind })
+    const parsed = parsePropertyRef(row)
+    if (!parsed) continue
+    rows.push(parsed)
     if (rows.length >= MAX_FILTER_RULES) break
   }
   return rows

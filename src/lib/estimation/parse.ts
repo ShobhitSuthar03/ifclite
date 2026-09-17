@@ -1,4 +1,4 @@
-import { parsePropertyRefs } from '@/lib/property-tree'
+import { parsePropertyRef, parsePropertyRefs, type PropertyRef } from '@/lib/property-tree'
 import { uniquePositiveIds } from '@/lib/saved-views'
 import { parseExcludedLines } from '@/lib/estimation/include'
 import { parseQtyBindings } from '@/lib/estimation/qty-bind'
@@ -38,6 +38,7 @@ function parseBoqDoc(value: unknown, fallbackId: string, seen: Set<string>): Boq
     id?: unknown
     name?: unknown
     groupBy?: unknown
+    linkProperty?: unknown
     root?: unknown
     qtyBindings?: unknown
     excludedLines?: unknown
@@ -50,6 +51,7 @@ function parseBoqDoc(value: unknown, fallbackId: string, seen: Set<string>): Boq
     id,
     name: typeof row.name === 'string' ? row.name.trim() : '',
     groupBy: parsePropertyRefs(row.groupBy),
+    linkProperty: parseLinkProperty(row),
     root: parseBoqNodes(row.root),
     qtyBindings: parseQtyBindings(row.qtyBindings),
     excludedLines: parseExcludedLines(row.excludedLines),
@@ -76,18 +78,28 @@ function parseBoqNode(value: unknown, seen: Set<string>): BoqNode | null {
     source?: unknown
     ids?: unknown
     assemblyId?: unknown
+    code?: unknown
+    assemblyCode?: unknown
+    qtyTakeoff?: unknown
+    matchProperty?: unknown
+    matchValue?: unknown
     children?: unknown
   }
   const id = typeof row.id === 'string' ? row.id : ''
   const name = typeof row.name === 'string' ? row.name.trim() : ''
   if (!id || !name || seen.has(id)) return null
   const kind = row.kind === 'heading' ? 'heading' : 'item'
-  const source = row.source === 'manual' ? 'manual' : 'property'
+  const source = row.source === 'manual' ? 'manual' : row.source === 'import' ? 'import' : 'property'
   const ids = Array.isArray(row.ids)
     ? uniquePositiveIds(row.ids.filter((entry) => typeof entry === 'number'))
     : []
   seen.add(id)
   const children = parseBoqNodes(row.children)
+  const code = typeof row.code === 'string' && row.code.trim() ? row.code.trim() : null
+  const assemblyCode =
+    typeof row.assemblyCode === 'string' && row.assemblyCode.trim() ? row.assemblyCode.trim() : null
+  const qtyTakeoff =
+    typeof row.qtyTakeoff === 'string' && row.qtyTakeoff.trim() ? row.qtyTakeoff.trim() : null
   return {
     id,
     name,
@@ -95,6 +107,18 @@ function parseBoqNode(value: unknown, seen: Set<string>): BoqNode | null {
     source,
     ids,
     assemblyId: typeof row.assemblyId === 'string' && row.assemblyId ? row.assemblyId : null,
+    code,
+    assemblyCode,
+    qtyTakeoff,
+    matchProperty: parsePropertyRef(row.matchProperty),
+    matchValue: typeof row.matchValue === 'string' && row.matchValue.trim() ? row.matchValue.trim() : null,
     children,
   }
+}
+
+function parseLinkProperty(row: { linkProperty?: unknown; groupBy?: unknown }): PropertyRef | null {
+  const direct = parsePropertyRef(row.linkProperty)
+  if (direct) return direct
+  if (Array.isArray(row.linkProperty)) return parsePropertyRefs(row.linkProperty)[0] ?? null
+  return null
 }

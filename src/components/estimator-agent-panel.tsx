@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, LoaderCircle, MessageSquarePlus, Send, Settings2, Square } from 'lucide-react'
+import { Bot, LoaderCircle, MessageSquarePlus, Send, Settings2, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { EstimatorMarkdown } from '@/components/estimator-markdown'
@@ -35,6 +35,7 @@ type EstimatorAgentPanelProps = {
   ensureQuantities?: (ids: number[]) => Promise<void>
   applyViewer?: (action: ViewerAction) => void | Promise<void>
   searchElements?: (input: PropertySearchInput) => Promise<PropertySearchResult>
+  onClose?: () => void
 }
 
 type ChatThread = {
@@ -74,6 +75,7 @@ export function EstimatorAgentPanel({
   ensureQuantities,
   applyViewer,
   searchElements,
+  onClose,
 }: EstimatorAgentPanelProps) {
   const [settings, setSettings] = useState<AgentSettings>(() => loadAgentSettings())
   const [showSettings, setShowSettings] = useState(false)
@@ -253,6 +255,16 @@ export function EstimatorAgentPanel({
         >
           <Settings2 className="h-3.5 w-3.5" />
         </Button>
+        {onClose ? (
+          <button
+            type="button"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+            title="Hide chat"
+            onClick={onClose}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
       </div>
       {showSettings ? (
         <div className="grid shrink-0 gap-2 border-b border-border bg-background p-3 text-xs sm:grid-cols-2">

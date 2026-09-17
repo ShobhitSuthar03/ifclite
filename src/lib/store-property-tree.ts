@@ -29,6 +29,17 @@ export function labelStorePropertyChunk(
   }
 }
 
+export function loadStoreValueLabels(
+  store: IfcDataStore,
+  ref: PropertyRef,
+  ids: number[],
+  overlay?: PropertyOverlay,
+): Map<number, string> {
+  const labels = new Map<number, string>()
+  labelStorePropertyChunk(store, ref, ids, 0, ids.length, labels, overlay)
+  return labels
+}
+
 export function treeFromLabeledIds(ids: number[], labels: Map<number, string>): PropertyTreeNode[] {
   return nestByValues(ids, [labels])
 }

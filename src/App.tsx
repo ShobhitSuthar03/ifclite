@@ -14,6 +14,7 @@ import { ScheduleDock, SCHEDULE_PANEL_DEFAULT_HEIGHT, type BottomWorkspaceTab } 
 import { CostAssemblyPanel } from '@/components/cost-assembly-panel'
 import { EstimationPanel } from '@/components/estimation-panel'
 import { AssemblyBuildUp } from '@/components/assembly-buildup'
+import { ElementCostCard } from '@/components/element-cost-card'
 import {
   buildDataStore,
   buildSpatialTreeFromStore,
@@ -54,7 +55,7 @@ import {
   createIfcQuery,
   type QuerySpec,
 } from '@/lib/ifc-query'
-import { usePanelWidths } from '@/lib/panel-layout'
+import { useEstimationPanes, usePanelWidths } from '@/lib/panel-layout'
 import { cn } from '@/lib/utils'
 import { applyClickSelection, setsEqual } from '@/lib/selection'
 import {
@@ -75,7 +76,7 @@ import {
   toggleFilterKeys,
   unionPropertyNodeIds,
 } from '@/lib/property-tree'
-import { missingTakeoffIds, resolveTakeoffTarget, TAKEOFF_CHUNK, type TakeoffProgress } from '@/lib/takeoff-scope'
+import { missingTakeoffIds, resolveTakeoffTarget, TAKEOFF_CHUNK, xorIds, type TakeoffProgress } from '@/lib/takeoff-scope'
 import { overlayAttributeKey, overlayFromPatches } from '@/lib/mutation-overlay'
 import { createMutationView, createWarehouseMutationView, overlayEntityData } from '@/lib/mutation-view'
 import { recycleCsvProcessor } from '@/lib/csv-export'
@@ -106,6 +107,8 @@ import {
   propertyCatalogFromWarehouse,
   queryWarehouse,
   buildWarehousePropertyTree,
+  loadValueLabels,
+  warehouseScopeIds,
   sumNumericValues,
   type BimDatabase,
   type FilterOptions,
@@ -162,17 +165,24 @@ import {
 import type { CostAssembly, CostAssemblyCatalog } from '@/lib/cost-assembly/types'
 import {
   activeBoq,
+  bindImportedBoq,
+  collectLinkProperties,
   emptyEstimation,
+  findBoqLeafForElement,
   findBoqNode,
   flattenBoq,
   mapActiveBoq,
   qtyBindingKey,
   quantityForIds,
   rebuildBoq,
+  elementBuildUps,
+  type BoqDoc,
   type EstimationDoc,
   type QtyBinding,
 } from '@/lib/estimation'
+import { buildUpRows } from '@/lib/cost-assembly/build-up'
 import { isDesktopShell } from '@/lib/host'
+import { elementTreeLabel } from '@/lib/element-label'
 import { EstimatorAgentPanel } from '@/components/estimator-agent-panel'
 import { searchModelElements } from '@/lib/estimator-tools/model-search'
 import type { PropertySearchInput, ViewerAction } from '@/lib/estimator-tools'
@@ -186,7 +196,7 @@ import {
 } from '@/lib/mcp/host'
 import { createViewerMeshStore } from '@/lib/viewer-meshes'
 import { typeTreeFromMeshes, uniqueIfcTypeTree } from '@/lib/geometry-tree'
-import { labelStorePropertyChunk, STORE_PROPERTY_CHUNK } from '@/lib/store-property-tree'
+import { labelStorePropertyChunk, loadStoreValueLabels, STORE_PROPERTY_CHUNK } from '@/lib/store-property-tree'
 
 type MobileTab = LeftTab | RightTab
 
@@ -396,6 +406,7 @@ export default function App() {
     resetRight,
     resetEstimation,
   } = usePanelWidths()
+  const { panes: estimationPanes, setPane: setEstimationPane, togglePane: toggleEstimationPane } = useEstimationPanes()
   const { theme } = useTheme()
 
   useEffect(() => subscribeGeometryEngine(setEngineStatus), [])
@@ -1508,12 +1519,15 @@ export default function App() {
   const onShowBoq = useCallback((ids: number[]) => {
     if (ids.length === 0) return
     const next = new Set(ids)
+    setFollowViewer(true)
+    setSimDate(null)
     setSelectedIds(next)
     setSelectedId(ids[0] ?? null)
     setDisplayMode('isolate')
     setFocusIds(next)
     setHiddenIds(new Set())
     setActiveViewId(null)
+    setFitToken((token) => token + 1)
   }, [])
 
   const applyAgentViewer = useCallback((action: ViewerAction) => {
@@ -1761,7 +1775,6 @@ export default function App() {
   const propertyCatalog = useMemo(() => {
     void reportTick
     void mutationTick
-    if (!propertiesUiOpen) return []
     try {
       if (warehouse) return propertyCatalogFromWarehouse(warehouse)
       if (store && !parsing) return propertyCatalogFromLensProvider(createLensProvider(store))
@@ -1769,7 +1782,7 @@ export default function App() {
       console.warn('Property catalog failed', caught)
     }
     return []
-  }, [warehouse, store, reportTick, mutationTick, propertiesUiOpen, parsing])
+  }, [warehouse, store, reportTick, mutationTick, parsing])
   const dataReady = store != null || warehouse != null
   const propertyHint =
     parsing || warehouseBusy
@@ -1885,6 +1898,46 @@ export default function App() {
       })),
     )
   }, [estimationPreviewTree])
+
+  const onBindImportedBoq = useCallback((boq: BoqDoc) => {
+    const refs = collectLinkProperties(boq)
+    if (refs.length === 0) return { boq, mappedLines: 0, mappedElements: 0 }
+    const labelsByProperty = new Map<string, Map<number, string>>()
+    if (warehouse) {
+      const scope = warehouseScopeIds(warehouse, spec)
+      for (const ref of refs) {
+        labelsByProperty.set(propertyRefKey(ref), loadValueLabels(warehouse, ref, scope))
+      }
+    } else if (store && !parsing) {
+      const overlay = overlayFromPatches(mutationPatches)
+      const ids = allExpressIds
+      for (const ref of refs) {
+        labelsByProperty.set(propertyRefKey(ref), loadStoreValueLabels(store, ref, ids, overlay))
+      }
+    } else {
+      return { boq, mappedLines: 0, mappedElements: 0 }
+    }
+    return bindImportedBoq(boq, labelsByProperty)
+  }, [warehouse, spec, store, parsing, mutationPatches, allExpressIds])
+
+  useEffect(() => {
+    if (!warehouse && !(store && !parsing)) return
+    setEstimation((current) => {
+      const sheet = activeBoq(current)
+      const unbound = flattenBoq(sheet.root).some(
+        (node) =>
+          node.source === 'import' &&
+          node.children.length === 0 &&
+          Boolean(node.matchValue || node.assemblyCode) &&
+          node.ids.length === 0,
+      )
+      if (!unbound) return current
+      if (!sheet.linkProperty && !flattenBoq(sheet.root).some((node) => node.matchProperty)) return current
+      const bound = onBindImportedBoq(sheet)
+      if (bound.mappedLines === 0) return current
+      return mapActiveBoq(current, () => bound.boq)
+    })
+  }, [warehouse, store, parsing, onBindImportedBoq])
 
   const selectedBoq = useMemo(
     () => findBoqNode(estimationSheet.root, selectedBoqId),
@@ -2020,6 +2073,13 @@ export default function App() {
     },
     [warehouse, selectedBoq],
   )
+  const measureBoqIfcIds = useCallback(
+    (ids: number[], ref: PropertyRef) => {
+      if (!warehouse) return 0
+      return sumNumericValues(warehouse, ref, ids)
+    },
+    [warehouse],
+  )
   const onBindBuildUpQty = useCallback(
     (rowId: string, binding: QtyBinding) => {
       if (!selectedBoqAssembly) return
@@ -2036,6 +2096,44 @@ export default function App() {
   const onExcludedBuildUpChange = useCallback((excludedLines: Record<string, boolean>) => {
     setEstimation((current) => mapActiveBoq(current, (boq) => ({ ...boq, excludedLines })))
   }, [])
+
+  const selectedElementCost = useMemo(() => {
+    if (!estimationUiOpen || selectedIds.size !== 1) return null
+    const id = [...selectedIds][0]
+    const node = findBoqLeafForElement(estimationSheet.root, id)
+    if (!node?.assemblyId || !assemblyCatalog) return null
+    const assembly = assemblyCatalog.assemblies.find((item) => item.id === node.assemblyId)
+    if (!assembly) return null
+    const [build] = elementBuildUps({
+      rows: buildUpRows(assembly.details),
+      ids: [id],
+      assemblyId: assembly.id,
+      assemblyUom: assembly.uom,
+      bindings: estimationSheet.qtyBindings ?? {},
+      excluded: estimationSheet.excludedLines ?? {},
+      quantities,
+      measureIfc: measureBoqIfcIds,
+      shareCount: node.ids.length,
+    })
+    if (!build) return null
+    return {
+      label: `${elementTreeLabel(store, id, warehouseLookup?.get(id)?.ifcType)} #${id}`,
+      node,
+      assembly,
+      build,
+    }
+  }, [
+    assemblyCatalog,
+    estimationSheet.excludedLines,
+    estimationSheet.qtyBindings,
+    estimationSheet.root,
+    estimationUiOpen,
+    measureBoqIfcIds,
+    quantities,
+    selectedIds,
+    store,
+    warehouseLookup,
+  ])
 
   const simWindows = useMemo(
     () => (scheduleModel?.hasSchedule ? productWindows(scheduleModel.tasks) : null),
@@ -2251,12 +2349,14 @@ export default function App() {
   }, [])
 
   const runTakeoff = useCallback(
-    (ids: number[], key: string) => {
+    (ids: number[], key: string, options?: { openPanel?: boolean }) => {
       if (ids.length === 0) return
       const gen = takeoffGen.current + 1
       takeoffGen.current = gen
-      setRightTab('quantities')
-      setMobileTab('quantities')
+      if (options?.openPanel !== false) {
+        setRightTab('quantities')
+        setMobileTab('quantities')
+      }
       setCalculatedView(true)
       setTakeoffScopeKey(key)
       setTakeoffDismissedKey(null)
@@ -2761,6 +2861,8 @@ export default function App() {
         onShowAll={onShowAll}
         onToggleCalculatedView={onToggleCalculatedView}
         onToggleFaceSelectMode={() => setFaceSelectMode((value) => !value)}
+        estimationPanes={estimationUiOpen ? estimationPanes : undefined}
+        onToggleEstimationPane={estimationUiOpen ? toggleEstimationPane : undefined}
       />
       <div ref={rowRef} className="flex min-h-0 flex-1 flex-col lg:flex-row">
         {estimationUiOpen ? null : (
@@ -2825,8 +2927,9 @@ export default function App() {
               onClearBasket={onClearFaceBasket}
             />
           )}
+          {selectedElementCost ? <ElementCostCard {...selectedElementCost} /> : null}
         </div>
-        {estimationUiOpen ? (
+        {estimationUiOpen && estimationPanes.buildup ? (
           <>
             <ResizeHandle
               axis="y"
@@ -2846,6 +2949,7 @@ export default function App() {
                 onBind={onBindBuildUpQty}
                 onExcludedChange={onExcludedBuildUpChange}
                 measureIfc={measureBoqIfc}
+                onClose={() => setEstimationPane('buildup', false)}
                 emptyHint={
                   selectedBoq
                     ? 'Assign an assembly on this BOQ line to see labour, material and plant.'
@@ -2857,6 +2961,7 @@ export default function App() {
         ) : null}
         </div>
         {estimationUiOpen ? (
+          estimationPanes.boq || estimationPanes.chat ? (
           <>
             <ResizeHandle
               label="Resize estimation panel"
@@ -2871,6 +2976,7 @@ export default function App() {
               className="flex min-h-0 min-w-0 flex-1 flex-col border-t border-border max-lg:!w-full lg:flex-none lg:border-t-0 lg:border-l"
               style={{ width: estimationWidth }}
             >
+              {estimationPanes.boq ? (
               <div className="min-h-0 flex-1 overflow-hidden">
               <EstimationPanel
                 doc={estimation}
@@ -2878,6 +2984,8 @@ export default function App() {
                 catalog={assemblyCatalog}
                 propertyCatalog={propertyCatalog}
                 quantities={quantities}
+                quantityBusy={quantityBusy}
+                takeoffProgress={takeoffProgress}
                 selectedIds={selectedIds}
                 selectedId={selectedBoqId}
                 hint={
@@ -2892,16 +3000,34 @@ export default function App() {
                 onChange={setEstimation}
                 onSelect={(node) => setSelectedBoqId(node?.id ?? null)}
                 onBuild={onBuildEstimation}
+                bindReady={Boolean(warehouse || (store && !parsing))}
+                onBind={onBindImportedBoq}
                 onShow={onShowBoq}
+                onCalculateTakeoff={(ids) => {
+                  const unique = [...new Set(ids)]
+                  runTakeoff(unique, `est|${unique.length}|${xorIds(unique)}`, { openPanel: false })
+                }}
+                onCancelTakeoff={cancelTakeoff}
+                onClosePane={() => setEstimationPane('boq', false)}
               />
               </div>
+              ) : null}
+              {estimationPanes.boq && estimationPanes.chat ? (
               <ResizeHandle
                 axis="y"
                 label="Resize estimator chat"
                 onDrag={(delta) => setEstimatorHeight((height) => Math.min(420, Math.max(140, height - delta)))}
                 onReset={() => setEstimatorHeight(240)}
               />
-              <div className="min-h-0 shrink-0 overflow-hidden border-t border-border" style={{ height: estimatorHeight }}>
+              ) : null}
+              {estimationPanes.chat ? (
+              <div
+                className={cn(
+                  'min-h-0 overflow-hidden border-t border-border',
+                  estimationPanes.boq ? 'shrink-0' : 'flex-1',
+                )}
+                style={estimationPanes.boq ? { height: estimatorHeight } : undefined}
+              >
                 <EstimatorAgentPanel
                   mcpReady={Boolean(mcp?.ready)}
                   mcpUrl={mcp?.url ?? null}
@@ -2922,10 +3048,13 @@ export default function App() {
                   ensureQuantities={ensureAgentTakeoff}
                   applyViewer={applyAgentViewer}
                   searchElements={async (input) => searchElementsForAgent(input)}
+                  onClose={() => setEstimationPane('chat', false)}
                 />
               </div>
+              ) : null}
             </div>
           </>
+          ) : null
         ) : (
           <>
             <ResizeHandle

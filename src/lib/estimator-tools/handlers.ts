@@ -423,6 +423,11 @@ function seedLeaves(runtime: EstimatorRuntime): BoqNode[] {
     source: 'property' as const,
     ids: grouped,
     assemblyId: null,
+    code: null,
+    assemblyCode: null,
+    qtyTakeoff: null,
+    matchProperty: null,
+    matchValue: null,
     children: [],
   }))
 }

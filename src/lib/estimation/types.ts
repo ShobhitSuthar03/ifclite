@@ -2,7 +2,7 @@ import type { PropertyRef } from '@/lib/property-tree'
 import type { QtyBinding } from '@/lib/estimation/qty-bind'
 
 export type BoqKind = 'heading' | 'item'
-export type BoqSource = 'property' | 'manual'
+export type BoqSource = 'property' | 'manual' | 'import'
 
 export type BoqNode = {
   id: string
@@ -11,6 +11,11 @@ export type BoqNode = {
   source: BoqSource
   ids: number[]
   assemblyId: string | null
+  code: string | null
+  assemblyCode: string | null
+  qtyTakeoff: string | null
+  matchProperty: PropertyRef | null
+  matchValue: string | null
   children: BoqNode[]
 }
 
@@ -18,6 +23,7 @@ export type BoqDoc = {
   id: string
   name: string
   groupBy: PropertyRef[]
+  linkProperty: PropertyRef | null
   root: BoqNode[]
   qtyBindings: Record<string, QtyBinding>
   excludedLines: Record<string, boolean>
@@ -40,6 +46,7 @@ export function emptyBoq(overrides: Partial<BoqDoc> = {}): BoqDoc {
     id: overrides.id ?? newBoqId(),
     name: overrides.name ?? 'BOQ 1',
     groupBy: overrides.groupBy ?? [],
+    linkProperty: overrides.linkProperty ?? null,
     root: overrides.root ?? [],
     qtyBindings: overrides.qtyBindings ?? {},
     excludedLines: overrides.excludedLines ?? {},
@@ -83,6 +90,19 @@ export function selectBoq(doc: EstimationDoc, id: string): EstimationDoc {
 
 export function addBoq(doc: EstimationDoc, name?: string): EstimationDoc {
   const sheet = emptyBoq({ name: name?.trim() || defaultBoqName(doc.boqs) })
+  return { activeId: sheet.id, boqs: [...doc.boqs, sheet] }
+}
+
+export function applyImportedBoq(doc: EstimationDoc, imported: BoqDoc): EstimationDoc {
+  const current = activeBoq(doc)
+  const empty = current.root.length === 0 && current.groupBy.length === 0
+  if (empty) {
+    return mapActiveBoq(doc, () => ({ ...imported, id: current.id }))
+  }
+  const used = new Set(doc.boqs.map((item) => item.id))
+  let id = imported.id
+  if (used.has(id)) id = newBoqId()
+  const sheet = { ...imported, id }
   return { activeId: sheet.id, boqs: [...doc.boqs, sheet] }
 }
 

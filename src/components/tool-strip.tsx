@@ -1,5 +1,6 @@
-import { Eye, EyeOff, Focus, Ghost, Home, MousePointerClick, Palette } from 'lucide-react'
+import { Bot, Eye, EyeOff, Focus, Ghost, Home, Layers, ListTree, MousePointerClick, Palette } from 'lucide-react'
 import type { DisplayMode } from '@/lib/view-visibility'
+import type { EstimationPaneId, EstimationPanes } from '@/lib/panel-layout'
 import { cn, formatCount } from '@/lib/utils'
 
 type ToolStripProps = {
@@ -19,6 +20,8 @@ type ToolStripProps = {
   onShowAll: () => void
   onToggleCalculatedView: () => void
   onToggleFaceSelectMode: () => void
+  estimationPanes?: EstimationPanes
+  onToggleEstimationPane?: (id: EstimationPaneId) => void
 }
 
 const btn =
@@ -41,6 +44,8 @@ export function ToolStrip({
   onShowAll,
   onToggleCalculatedView,
   onToggleFaceSelectMode,
+  estimationPanes,
+  onToggleEstimationPane,
 }: ToolStripProps) {
   return (
     <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border bg-card px-3">
@@ -111,6 +116,31 @@ export function ToolStrip({
         Left-drag orbit · Right-drag pan · Scroll zoom · Click select · Ctrl+click add
       </p>
       <div className="ml-auto flex items-center gap-1">
+        {estimationPanes && onToggleEstimationPane ? (
+          <div className="mr-1 flex items-center gap-0.5 rounded border border-border bg-background p-0.5">
+            {(
+              [
+                ['boq', 'BOQ', ListTree],
+                ['buildup', 'Assembly', Layers],
+                ['chat', 'Chat', Bot],
+              ] as const
+            ).map(([id, label, Icon]) => {
+              const open = estimationPanes[id]
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  title={open ? `Hide ${label}` : `Show ${label}`}
+                  className={cn(btn, 'h-7', open && 'bg-primary/20 text-primary')}
+                  onClick={() => onToggleEstimationPane(id)}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  <span className="hidden xl:inline">{label}</span>
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
         {hiddenCount > 0 && (
           <span className="rounded-[3px] bg-secondary px-1.5 py-px text-[10px] font-semibold">
             {formatCount(hiddenCount)} hidden

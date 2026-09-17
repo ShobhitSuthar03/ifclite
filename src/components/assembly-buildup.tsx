@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Check, ChevronDown, ChevronRight, Minus } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Minus, X } from 'lucide-react'
 import type { CostAssembly, CostKind } from '@/lib/cost-assembly/types'
 import { displayText, englishHint } from '@/lib/cost-assembly/types'
 import { COST_KIND_LABEL, COST_KIND_SHORT, formatAssemblyMoney, formatAssemblyQty, formatAssemblyUnit } from '@/lib/cost-assembly/search'
@@ -42,6 +42,7 @@ type AssemblyBuildUpProps = {
   onExcludedChange?: (excluded: Record<string, boolean>) => void
   measureIfc?: (ref: PropertyRef) => number
   emptyHint?: string
+  onClose?: () => void
 }
 
 export function AssemblyBuildUp({
@@ -56,11 +57,15 @@ export function AssemblyBuildUp({
   onExcludedChange,
   measureIfc,
   emptyHint,
+  onClose,
 }: AssemblyBuildUpProps) {
   if (!assembly) {
     return (
-      <div className="flex h-full items-center justify-center px-4 text-[12px] text-muted-foreground">
-        {emptyHint ?? 'Select a BOQ line with an assembly to see labour, material and plant.'}
+      <div className="flex h-full flex-col">
+        {onClose ? <BuildUpCloseBar onClose={onClose} /> : null}
+        <div className="flex flex-1 items-center justify-center px-4 text-[12px] text-muted-foreground">
+          {emptyHint ?? 'Select a BOQ line with an assembly to see labour, material and plant.'}
+        </div>
       </div>
     )
   }
@@ -77,7 +82,24 @@ export function AssemblyBuildUp({
       onBind={onBind}
       onExcludedChange={onExcludedChange}
       measureIfc={measureIfc}
+      onClose={onClose}
     />
+  )
+}
+
+function BuildUpCloseBar({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-border bg-muted/60 px-2">
+      <span className="text-[11px] font-medium">Assembly</span>
+      <button
+        type="button"
+        className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+        title="Hide assembly"
+        onClick={onClose}
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
   )
 }
 
@@ -92,6 +114,7 @@ function AssemblyBuildUpBody({
   onBind,
   onExcludedChange,
   measureIfc,
+  onClose,
 }: {
   assembly: CostAssembly
   elementIds: number[]
@@ -103,6 +126,7 @@ function AssemblyBuildUpBody({
   onBind?: (rowId: string, binding: QtyBinding) => void
   onExcludedChange?: (excluded: Record<string, boolean>) => void
   measureIfc?: (ref: PropertyRef) => number
+  onClose?: () => void
 }) {
   const title = englishHint(assembly.description) || displayText(assembly.description)
   const takeoff = assemblyQty != null && Number.isFinite(assemblyQty) ? assemblyQty : null
@@ -241,10 +265,20 @@ function AssemblyBuildUpBody({
             ) : null,
           )}
         </div>
+        {onClose ? (
+          <button
+            type="button"
+            className="ml-auto flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+            title="Hide assembly"
+            onClick={onClose}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
       </div>
       <div className="min-h-0 flex-1 overflow-auto bg-background px-2 py-1">
         <div className="mb-1 flex items-center gap-2 px-1">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Cost build-up</p>
+          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Cost items</p>
           <span className="flex-1" />
           <button type="button" className="h-6 px-1.5 text-[12px] text-muted-foreground hover:text-foreground" onClick={() => setExpanded(new Set(groupIds))}>
             Expand

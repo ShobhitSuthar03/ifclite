@@ -4,6 +4,7 @@ export {
   boqLabel,
   clearEstimationBoq,
   defaultBoqName,
+  applyImportedBoq,
   emptyBoq,
   emptyEstimation,
   mapActiveBoq,
@@ -17,6 +18,11 @@ export {
   type EstimationDoc,
 } from '@/lib/estimation/types'
 export { parseEstimation } from '@/lib/estimation/parse'
+export { importBoqFile } from '@/lib/estimation/import'
+export { parseBoqCsv } from '@/lib/estimation/import-csv'
+export { parseBoqXml } from '@/lib/estimation/import-xml'
+export { pickBoqCsvFile, pickBoqXmlFile } from '@/lib/estimation/pick'
+export { mapQtoType, parseQtoFormula, type BoqImportResult } from '@/lib/estimation/import-table'
 export { quantityForIds, uomMethod, type QtyMethod } from '@/lib/estimation/qty'
 export {
   groupIncludeState,
@@ -28,6 +34,7 @@ export {
 export {
   TAKEOFF_QTY_FIELDS,
   computedLineAmount,
+  elementBuildUps,
   measureTakeoff,
   measuredLineQty,
   parseQtyBinding,
@@ -38,6 +45,8 @@ export {
   qtySourceValue,
   resolveQtyBinding,
   suggestQtyBinding,
+  type ElementBuildUp,
+  type ElementBuildUpLine,
   type QtyBinding,
   type QtyMeasureContext,
 } from '@/lib/estimation/qty-bind'
@@ -49,6 +58,7 @@ export {
   createManualItem,
   defaultManualName,
   findBoqNode,
+  findBoqLeafForElement,
   flattenBoq,
   newManualBoqId,
   propertyBoqId,
@@ -57,5 +67,12 @@ export {
   renameBoqNode,
   rollupAmount,
   setNodeAssembly,
+  setNodeMatch,
   takeManualForest,
 } from '@/lib/estimation/tree'
+export {
+  bindImportedBoq,
+  collectLinkProperties,
+  lineMatchValue,
+  parseMatchPropertyText,
+} from '@/lib/estimation/bind'

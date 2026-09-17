@@ -1,4 +1,4 @@
-import type { PropertyTreeNode } from '@/lib/property-tree'
+import type { PropertyRef, PropertyTreeNode } from '@/lib/property-tree'
 import { uniquePositiveIds } from '@/lib/saved-views'
 import type { BoqNode } from '@/lib/estimation/types'
 
@@ -21,6 +21,11 @@ export function createManualItem(name: string, ids: Iterable<number>): BoqNode |
     source: 'manual',
     ids: unique,
     assemblyId: null,
+    code: null,
+    assemblyCode: null,
+    qtyTakeoff: null,
+    matchProperty: null,
+    matchValue: null,
     children: [],
   }
 }
@@ -35,6 +40,11 @@ export function createManualHeading(name: string): BoqNode | null {
     source: 'manual',
     ids: [],
     assemblyId: null,
+    code: null,
+    assemblyCode: null,
+    qtyTakeoff: null,
+    matchProperty: null,
+    matchValue: null,
     children: [],
   }
 }
@@ -63,6 +73,11 @@ export function boqFromPropertyTree(
       source: 'property',
       ids: [...node.ids],
       assemblyId: previous.get(id) ?? null,
+      code: null,
+      assemblyCode: null,
+      qtyTakeoff: null,
+      matchProperty: null,
+      matchValue: null,
       children,
     }
   })
@@ -71,7 +86,7 @@ export function boqFromPropertyTree(
 export function takeManualForest(nodes: BoqNode[]): BoqNode[] {
   const out: BoqNode[] = []
   for (const node of nodes) {
-    if (node.source === 'manual') out.push(node)
+    if (node.source !== 'property') out.push(node)
     else out.push(...takeManualForest(node.children))
   }
   return out
@@ -90,6 +105,24 @@ export function findBoqNode(nodes: BoqNode[], id: string | null | undefined): Bo
     if (nested) return nested
   }
   return null
+}
+
+export function setNodeMatch(
+  nodes: BoqNode[],
+  nodeId: string,
+  patch: { matchProperty?: PropertyRef | null; matchValue?: string | null },
+): BoqNode[] {
+  return nodes.map((node) => {
+    if (node.id === nodeId) {
+      return {
+        ...node,
+        matchProperty: patch.matchProperty !== undefined ? patch.matchProperty : node.matchProperty,
+        matchValue: patch.matchValue !== undefined ? (patch.matchValue?.trim() ? patch.matchValue.trim() : null) : node.matchValue,
+      }
+    }
+    if (node.children.length === 0) return node
+    return { ...node, children: setNodeMatch(node.children, nodeId, patch) }
+  })
 }
 
 export function setNodeAssembly(nodes: BoqNode[], nodeId: string, assemblyId: string | null): BoqNode[] {
@@ -122,7 +155,7 @@ export function renameBoqNode(nodes: BoqNode[], nodeId: string, name: string): B
   const trimmed = name.trim()
   if (!trimmed) return nodes
   return nodes.map((node) => {
-    if (node.id === nodeId) return node.source === 'manual' ? { ...node, name: trimmed } : node
+    if (node.id === nodeId) return node.source !== 'property' ? { ...node, name: trimmed } : node
     return { ...node, children: renameBoqNode(node.children, nodeId, trimmed) }
   })
 }
@@ -137,6 +170,11 @@ export function flattenBoq(nodes: BoqNode[]): BoqNode[] {
   return out
 }
 
+export function findBoqLeafForElement(nodes: BoqNode[], expressId: number): BoqNode | null {
+  const leaves = flattenBoq(nodes).filter((node) => node.children.length === 0 && node.ids.includes(expressId))
+  return leaves.find((node) => node.assemblyId) ?? leaves[0] ?? null
+}
+
 export function rollupAmount(node: BoqNode, amountOf: (node: BoqNode) => number): number {
   if (node.assemblyId) return amountOf(node)
   return node.children.reduce((sum, child) => sum + rollupAmount(child, amountOf), 0)
@@ -144,6 +182,6 @@ export function rollupAmount(node: BoqNode, amountOf: (node: BoqNode) => number)
 
 export function defaultManualName(root: BoqNode[], kind: 'heading' | 'item'): string {
   const prefix = kind === 'heading' ? 'Heading' : 'Item'
-  const count = flattenBoq(root).filter((node) => node.source === 'manual' && node.kind === kind).length
+  const count = flattenBoq(root).filter((node) => node.source !== 'property' && node.kind === kind).length
   return `${prefix} ${count + 1}`
 }

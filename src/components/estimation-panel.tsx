@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, Eye, ListTree, Plus, Search, Trash2, X } from 'lucide-react'
+import { Calculator, ChevronDown, ChevronRight, Eye, FileSpreadsheet, FileUp, ListTree, Plus, Search, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { CostAssembly, CostAssemblyCatalog } from '@/lib/cost-assembly/types'
 import { displayText, englishHint } from '@/lib/cost-assembly/types'
@@ -7,6 +7,7 @@ import { formatAssemblyMoney, formatAssemblyQty, formatAssemblyUnit } from '@/li
 import {
   activeBoq,
   addBoq,
+  applyImportedBoq,
   addChildNode,
   boqLabel,
   createManualHeading,
@@ -14,7 +15,12 @@ import {
   defaultManualName,
   findBoqNode,
   flattenBoq,
+  lineMatchValue,
   mapActiveBoq,
+  parseBoqCsv,
+  parseBoqXml,
+  pickBoqCsvFile,
+  pickBoqXmlFile,
   quantityForIds,
   removeBoq,
   removeBoqNode,
@@ -22,11 +28,13 @@ import {
   rollupAmount,
   selectBoq,
   setNodeAssembly,
+  setNodeMatch,
   type BoqDoc,
   type BoqNode,
   type EstimationDoc,
 } from '@/lib/estimation'
 import { groupingCatalog, type PropertyCatalogSet } from '@/lib/bim-sql'
+import { linkPropertyOptions } from '@/lib/cost-assembly/links'
 import {
   addFilterRule,
   MAX_FILTER_RULES,
@@ -38,6 +46,7 @@ import {
   type PropertyTreeNode,
 } from '@/lib/property-tree'
 import type { QuantityResult } from '@/lib/geometry-qto'
+import { missingTakeoffIds, type TakeoffProgress } from '@/lib/takeoff-scope'
 import { cn, formatCount } from '@/lib/utils'
 
 type EstimationPanelProps = {
@@ -46,13 +55,20 @@ type EstimationPanelProps = {
   catalog: CostAssemblyCatalog | null
   propertyCatalog: PropertyCatalogSet[]
   quantities: QuantityResult | null
+  quantityBusy?: boolean
+  takeoffProgress?: TakeoffProgress | null
   selectedIds: Set<number>
   selectedId: string | null
   hint?: string | null
   onChange: (doc: EstimationDoc) => void
   onSelect: (node: BoqNode | null) => void
   onBuild: () => void
+  bindReady?: boolean
+  onBind?: (boq: BoqDoc) => { boq: BoqDoc; mappedLines: number; mappedElements: number }
   onShow: (ids: number[]) => void
+  onCalculateTakeoff?: (ids: number[]) => void
+  onCancelTakeoff?: () => void
+  onClosePane?: () => void
 }
 
 export function EstimationPanel({
@@ -61,16 +77,24 @@ export function EstimationPanel({
   catalog,
   propertyCatalog,
   quantities,
+  quantityBusy = false,
+  takeoffProgress = null,
   selectedIds,
   selectedId,
   hint,
   onChange,
   onSelect,
   onBuild,
+  onBind,
   onShow,
+  onCalculateTakeoff,
+  onCancelTakeoff,
+  onClosePane,
 }: EstimationPanelProps) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [nameDraft, setNameDraft] = useState('')
+  const [importHint, setImportHint] = useState<string | null>(null)
+  const [importing, setImporting] = useState(false)
   const sheet = activeBoq(doc)
   const structureKey = useMemo(
     () => `${sheet.id}:${flattenBoq(sheet.root).map((node) => node.id).join('|')}`,
@@ -90,9 +114,44 @@ export function EstimationPanel({
     [sheet.root, byId, quantities],
   )
   const rows = useMemo(() => visibleBoqRows(sheet.root, expanded), [sheet.root, expanded])
+  const takeoffIds = useMemo(() => {
+    if (selectedIds.size > 0) return [...selectedIds]
+    return selected?.ids ?? []
+  }, [selected?.ids, selectedIds])
+  const takeoffMissing = useMemo(
+    () => missingTakeoffIds(takeoffIds, quantities?.elements.map((item) => item.expressId) ?? []),
+    [quantities, takeoffIds],
+  )
 
   const changeSheet = (updater: (boq: BoqDoc) => BoqDoc) => onChange(mapActiveBoq(doc, updater))
   const setGroupBy = (groupBy: typeof sheet.groupBy) => changeSheet((boq) => ({ ...boq, groupBy }))
+
+  const applyBind = (next: BoqDoc) => {
+    if (!onBind) {
+      changeSheet(() => next)
+      return { mappedLines: 0, mappedElements: 0 }
+    }
+    const bound = onBind(next)
+    changeSheet(() => bound.boq)
+    return bound
+  }
+
+  const mapElements = () => {
+    if (!sheet.linkProperty && !flattenBoq(sheet.root).some((node) => node.matchProperty)) {
+      setImportHint('Pick a model property first. Each BOQ line uses its MatchKey / value against that property.')
+      return
+    }
+    const bound = applyBind(sheet)
+    const ids = flattenBoq(bound.boq.root)
+      .filter((node) => node.children.length === 0)
+      .flatMap((node) => node.ids)
+    if (ids.length > 0) onShow(ids)
+    setImportHint(
+      bound.mappedLines
+        ? `Mapped ${bound.mappedLines} line${bound.mappedLines === 1 ? '' : 's'} → ${formatCount(bound.mappedElements)} elements`
+        : 'No elements matched. Check the property (ObjectType, Tag, classification) and each line’s value.',
+    )
+  }
 
   const addItem = () => {
     const item = createManualItem(nameDraft || defaultManualName(sheet.root, 'item'), selectedIds)
@@ -111,6 +170,25 @@ export function EstimationPanel({
     changeSheet((boq) => ({ ...boq, root: addChildNode(boq.root, parentId, heading) }))
     setNameDraft('')
     onSelect(heading)
+  }
+
+  const importBoq = async (kind: 'xml' | 'csv') => {
+    const file = kind === 'xml' ? await pickBoqXmlFile() : await pickBoqCsvFile()
+    if (!file) return
+    setImporting(true)
+    try {
+      const assemblies = catalog?.assemblies
+      const result = kind === 'xml' ? parseBoqXml(file.bytes, file.name, assemblies) : parseBoqCsv(file.bytes, file.name, assemblies)
+      onChange(applyImportedBoq(doc, result.boq))
+      onSelect(null)
+      setImportHint(
+        `Imported ${result.itemCount} item${result.itemCount === 1 ? '' : 's'} from ${file.name}. Pick a property, then Map — each line’s MatchKey is the value.`,
+      )
+    } catch (caught) {
+      setImportHint(caught instanceof Error ? caught.message : String(caught))
+    } finally {
+      setImporting(false)
+    }
   }
 
   const toggle = (id: string) => {
@@ -179,6 +257,16 @@ export function EstimationPanel({
           <Plus className="h-3.5 w-3.5" />
           New BOQ
         </Button>
+        {onClosePane ? (
+          <button
+            type="button"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+            title="Hide BOQ"
+            onClick={onClosePane}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
       </div>
 
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
@@ -214,16 +302,16 @@ export function EstimationPanel({
         </Button>
       </div>
 
-      <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-3 py-1.5">
+      <div className="relative z-20 flex shrink-0 flex-wrap items-center gap-1.5 overflow-visible border-b border-border px-3 py-1.5">
         {sheet.groupBy.map((rule, index) => (
           <span
             key={`${propertyRefKey(rule)}-${index}`}
-            className="flex h-7 items-center gap-1 rounded border border-border bg-muted/40 px-1.5 text-[11px]"
+            className="flex h-7 shrink-0 items-center gap-1 rounded border border-border bg-muted/40 px-1.5 text-[11px]"
           >
             <span className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">
               {index === 0 ? 'Group' : 'Then'}
             </span>
-            <span className="max-w-[10rem] truncate">{propertyRefLabel(rule)}</span>
+            <span className="max-w-[9rem] truncate">{propertyRefLabel(rule)}</span>
             <button
               type="button"
               className="text-muted-foreground hover:text-foreground"
@@ -234,54 +322,152 @@ export function EstimationPanel({
           </span>
         ))}
         <GroupingPropertySearch
-          key={sheet.id}
+          key={`${sheet.id}-group`}
           catalog={propertyCatalog}
           rules={sheet.groupBy}
           disabled={sheet.groupBy.length >= MAX_FILTER_RULES}
+          placeholder="Search properties"
           onPick={(ref) => setGroupBy(addFilterRule(sheet.groupBy, ref))}
         />
         <Button
           size="sm"
-          className="h-7 px-2 text-[11px]"
+          className="h-7 shrink-0 px-2 text-[11px]"
           disabled={sheet.groupBy.length === 0 || previewTree.length === 0}
           onClick={onBuild}
         >
           Build
         </Button>
-        {previewTree.length > 0 ? (
-          <span className="text-[10px] text-muted-foreground">{formatCount(previewCount(previewTree))} groups</span>
+        <span className="mx-1 h-4 w-px shrink-0 bg-border" />
+        {sheet.linkProperty ? (
+          <span className="flex h-7 shrink-0 items-center gap-1 rounded border border-border bg-muted/40 px-1.5 text-[11px]">
+            <span className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Link</span>
+            <span className="max-w-[9rem] truncate">{propertyRefLabel(sheet.linkProperty)}</span>
+            <button
+              type="button"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => changeSheet((boq) => ({ ...boq, linkProperty: null }))}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
         ) : null}
-        <span className="flex-1" />
+        <GroupingPropertySearch
+          key={`${sheet.id}-link`}
+          catalog={linkPropertyOptions(propertyCatalog)}
+          rules={[]}
+          disabled={false}
+          placeholder="Search property to map…"
+          wide
+          onPick={(ref) => {
+            const bound = applyBind({ ...sheet, linkProperty: ref })
+            const ids = flattenBoq(bound.boq.root)
+              .filter((node) => node.children.length === 0)
+              .flatMap((node) => node.ids)
+            if (ids.length > 0) onShow(ids)
+            setImportHint(
+              bound.mappedLines
+                ? `Mapped ${bound.mappedLines} line${bound.mappedLines === 1 ? '' : 's'} → ${formatCount(bound.mappedElements)} elements via ${propertyRefLabel(ref)}`
+                : `No elements matched ${propertyRefLabel(ref)}. Check each line’s value, then Map.`,
+            )
+          }}
+        />
+        <Button
+          size="sm"
+          className="h-7 shrink-0 px-2 text-[11px]"
+          title="Assign IFC elements whose property equals each line’s MatchKey / value"
+          onClick={mapElements}
+        >
+          Map
+        </Button>
+      </div>
+      <div className="flex shrink-0 flex-nowrap items-center gap-1.5 overflow-x-auto border-b border-border px-3 py-1.5">
         <input
-          className="h-7 w-36 rounded border border-border bg-background px-2 text-[11px] outline-none"
+          className="h-7 w-40 shrink-0 rounded border border-border bg-background px-2 text-[11px] outline-none"
           placeholder="New heading / item"
           value={nameDraft}
           onChange={(event) => setNameDraft(event.target.value)}
         />
-        <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" onClick={addHeading}>
+        <Button size="sm" variant="outline" className="h-7 shrink-0 px-2 text-[11px]" onClick={addHeading}>
           <Plus className="h-3 w-3" />
           Heading
         </Button>
         <Button
           size="sm"
           variant="outline"
-          className="h-7 px-2 text-[11px]"
+          className="h-7 shrink-0 px-2 text-[11px]"
           disabled={selectedIds.size === 0}
           onClick={addItem}
         >
           <Plus className="h-3 w-3" />
           Item · {formatCount(selectedIds.size)}
         </Button>
+        <span className="flex-1" />
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 shrink-0 px-2 text-[11px]"
+          disabled={importing}
+          title="Import iTWO Element Planning XML"
+          onClick={() => void importBoq('xml')}
+        >
+          <FileUp className="h-3 w-3" />
+          XML
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 shrink-0 px-2 text-[11px]"
+          disabled={importing}
+          title="Import BOQ CSV template"
+          onClick={() => void importBoq('csv')}
+        >
+          <FileSpreadsheet className="h-3 w-3" />
+          CSV
+        </Button>
       </div>
+      {onCalculateTakeoff ? (
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-3 py-1.5">
+          <Calculator className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="text-[11px] text-muted-foreground">
+            {takeoffIds.length === 0
+              ? 'Select a BOQ line or 3D elements to calculate quantities.'
+              : quantityBusy && takeoffProgress
+                ? `Calculating ${takeoffProgress.done} / ${takeoffProgress.total}`
+                : takeoffMissing.length > 0
+                  ? `${formatCount(takeoffIds.length)} selected · ${formatCount(takeoffMissing.length)} need QTO`
+                  : `${formatCount(takeoffIds.length)} selected · quantities ready`}
+          </span>
+          <span className="flex-1" />
+          {quantityBusy ? (
+            <Button size="sm" variant="outline" className="h-7 shrink-0 px-2 text-[11px]" onClick={onCancelTakeoff}>
+              Stop
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              className="h-7 shrink-0 px-2 text-[11px]"
+              disabled={takeoffMissing.length === 0}
+              title="Measure volume, area, and formwork for the current selection without leaving Estimation"
+              onClick={() => onCalculateTakeoff(takeoffIds)}
+            >
+              <Calculator className="h-3 w-3" />
+              Calculate · {formatCount(takeoffMissing.length)}
+            </Button>
+          )}
+        </div>
+      ) : null}
       {hint ? <p className="shrink-0 border-b border-border px-3 py-1 text-[11px] text-muted-foreground">{hint}</p> : null}
+      {importHint ? (
+        <p className="shrink-0 border-b border-border px-3 py-1 text-[11px] text-muted-foreground">{importHint}</p>
+      ) : null}
 
       {sheet.root.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center text-[12px] text-muted-foreground">
           <ListTree className="h-5 w-5" />
           <p className="font-medium text-foreground">{boqLabel(sheet)} is empty</p>
           <p>
-            Grouping on this tab applies only to this BOQ. Search a property, then Build. Or add a heading and drop a 3D
-            selection onto an item.
+            Grouping builds a live tree from IFC properties. Import XML/CSV, pick a link property, then Map so each
+            line’s MatchKey selects matching elements.
           </p>
         </div>
       ) : (
@@ -289,13 +475,16 @@ export function EstimationPanel({
           <table className="w-full table-fixed border-collapse text-[12px]">
             <thead className="sticky top-0 z-10 bg-card">
               <tr className="border-b border-border text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                <th className="px-3 py-1.5 text-left font-medium">Description</th>
-                <th className="w-[11rem] px-2 py-1.5 text-left font-medium">Assembly</th>
-                <th className="w-[4.5rem] px-2 py-1.5 text-right font-medium">Qty</th>
-                <th className="w-[3.25rem] px-2 py-1.5 text-right font-medium">Unit</th>
-                <th className="w-[5.75rem] px-2 py-1.5 text-right font-medium">Rate</th>
-                <th className="w-[6.5rem] px-2 py-1.5 text-right font-medium">Amount</th>
-                <th className="w-[4.5rem] px-2 py-1.5 text-right font-medium" />
+                <th className="w-[4.25rem] px-2 py-1.5 text-left font-medium">Code</th>
+                <th className="px-2 py-1.5 text-left font-medium">Description</th>
+                <th className="w-[7.5rem] px-2 py-1.5 text-left font-medium">Value</th>
+                <th className="w-[3.25rem] px-2 py-1.5 text-right font-medium">El.</th>
+                <th className="w-[10rem] px-2 py-1.5 text-left font-medium">Assembly</th>
+                <th className="w-[4.25rem] px-2 py-1.5 text-right font-medium">Qty</th>
+                <th className="w-[3rem] px-2 py-1.5 text-right font-medium">Unit</th>
+                <th className="w-[5.25rem] px-2 py-1.5 text-right font-medium">Rate</th>
+                <th className="w-[5.75rem] px-2 py-1.5 text-right font-medium">Amount</th>
+                <th className="w-[5.5rem] px-1 py-1.5 text-right font-medium" />
               </tr>
             </thead>
             <tbody>
@@ -308,6 +497,7 @@ export function EstimationPanel({
                 const amount = rollupAmount(node, (item) => lineAmount(item, byId, quantities))
                 const open = expanded.has(node.id)
                 const active = selectedId === node.id
+                const matchValue = lineMatchValue(node)
                 return (
                   <tr
                     key={node.id}
@@ -321,12 +511,12 @@ export function EstimationPanel({
                       if (node.ids.length > 0) onShow(node.ids)
                     }}
                   >
-                    <td className="px-3 py-0">
-                      <div className="flex h-8 min-w-0 items-center gap-1" style={{ paddingLeft: depth * 14 }}>
+                    <td className="overflow-hidden px-2 py-0">
+                      <div className="flex h-8 items-center" style={{ paddingLeft: depth * 12 }}>
                         {node.children.length > 0 ? (
                           <button
                             type="button"
-                            className="flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
+                            className="mr-0.5 flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
                             onClick={(event) => {
                               event.stopPropagation()
                               toggle(node.id)
@@ -337,32 +527,66 @@ export function EstimationPanel({
                         ) : (
                           <span className="w-5 shrink-0" />
                         )}
-                        {node.source === 'manual' && active ? (
-                          <input
-                            className="h-6 min-w-0 flex-1 rounded border border-border bg-background px-1 text-[12px] outline-none"
-                            value={node.name}
-                            onClick={(event) => event.stopPropagation()}
-                            onChange={(event) =>
-                              changeSheet((boq) => ({
-                                ...boq,
-                                root: renameBoqNode(boq.root, node.id, event.target.value),
-                              }))
-                            }
-                          />
-                        ) : (
-                          <span className="min-w-0 truncate">{node.name}</span>
-                        )}
-                        <span className="shrink-0 font-mono text-[10px] font-normal text-muted-foreground">
-                          {formatCount(node.ids.length)}
+                        <span className="truncate font-mono text-[10px] font-normal text-muted-foreground">
+                          {node.code ?? ''}
                         </span>
                       </div>
                     </td>
-                    <td className="px-2 py-0">
+                    <td className="overflow-hidden px-2 py-0">
+                      {node.source !== 'property' && active ? (
+                        <input
+                          className="h-7 w-full rounded border border-border bg-background px-1 text-[12px] outline-none"
+                          value={node.name}
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={(event) =>
+                            changeSheet((boq) => ({
+                              ...boq,
+                              root: renameBoqNode(boq.root, node.id, event.target.value),
+                            }))
+                          }
+                        />
+                      ) : (
+                        <span className="block truncate leading-8">{node.name}</span>
+                      )}
+                    </td>
+                    <td className="overflow-hidden px-2 py-0">
+                      {heading ? (
+                        <span />
+                      ) : node.source === 'import' && active ? (
+                        <input
+                          className="h-7 w-full rounded border border-border bg-background px-1 font-mono text-[11px] outline-none"
+                          value={node.matchValue ?? node.assemblyCode ?? ''}
+                          placeholder="Match value"
+                          title="IFC property value for this line"
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={(event) =>
+                            changeSheet((boq) => ({
+                              ...boq,
+                              root: setNodeMatch(boq.root, node.id, { matchValue: event.target.value }),
+                            }))
+                          }
+                          onBlur={(event) => {
+                            applyBind({
+                              ...sheet,
+                              root: setNodeMatch(sheet.root, node.id, { matchValue: event.currentTarget.value }),
+                            })
+                          }}
+                        />
+                      ) : (
+                        <span className="block truncate font-mono text-[11px] font-normal leading-8 text-muted-foreground">
+                          {matchValue}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-2 text-right font-mono text-[11px] tabular-nums leading-8 text-muted-foreground">
+                      {formatCount(node.ids.length)}
+                    </td>
+                    <td className="overflow-hidden px-2 py-0">
                       {heading && !node.assemblyId ? (
-                        <span className="text-[11px] text-muted-foreground" />
+                        <span />
                       ) : (
                         <select
-                          className="h-7 w-full max-w-[11rem] rounded border border-border bg-background px-1 text-[11px] font-normal"
+                          className="h-7 w-full rounded border border-border bg-background px-1 text-[11px] font-normal"
                           value={node.assemblyId ?? ''}
                           onClick={(event) => event.stopPropagation()}
                           onChange={(event) => {
@@ -386,19 +610,19 @@ export function EstimationPanel({
                         </select>
                       )}
                     </td>
-                    <td className="px-2 text-right font-mono text-[12px] tabular-nums">
+                    <td className="px-2 text-right font-mono text-[12px] tabular-nums leading-8">
                       {heading && !assembly ? '' : formatAssemblyQty(line.qty)}
                     </td>
-                    <td className="px-2 text-right text-[11px] text-muted-foreground">
+                    <td className="px-2 text-right text-[11px] leading-8 text-muted-foreground">
                       {assembly ? formatAssemblyUnit(assembly.uom) : heading ? '' : 'nr'}
                     </td>
-                    <td className="px-2 text-right font-mono text-[12px] tabular-nums">
+                    <td className="px-2 text-right font-mono text-[12px] tabular-nums leading-8">
                       {assembly ? formatAssemblyMoney(assembly.costs, assembly.currency || currency) : ''}
                     </td>
-                    <td className="px-2 text-right font-mono text-[12px] tabular-nums">
+                    <td className="px-2 text-right font-mono text-[12px] tabular-nums leading-8">
                       {amount > 0 ? formatAssemblyMoney(amount, currency) : heading ? '' : '—'}
                     </td>
-                    <td className="px-2 py-0">
+                    <td className="px-1 py-0">
                       <div
                         className={cn(
                           'flex h-8 items-center justify-end gap-0.5',
@@ -421,6 +645,25 @@ export function EstimationPanel({
                         >
                           <Eye className="h-3.5 w-3.5" />
                         </button>
+                        {onCalculateTakeoff ? (
+                          <button
+                            type="button"
+                            className={cn(
+                              'flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground',
+                              node.ids.length === 0 && 'invisible',
+                            )}
+                            title="Calculate quantities for this line"
+                            disabled={node.ids.length === 0 || quantityBusy}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              onSelect(node)
+                              onShow(node.ids)
+                              onCalculateTakeoff(node.ids)
+                            }}
+                          >
+                            <Calculator className="h-3.5 w-3.5" />
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-destructive"
@@ -441,7 +684,7 @@ export function EstimationPanel({
             </tbody>
             <tfoot className="sticky bottom-0 bg-card">
               <tr className="border-t border-border">
-                <td className="px-3 py-1.5 text-[11px] font-medium" colSpan={5}>
+                <td className="px-2 py-1.5 text-[11px] font-medium" colSpan={8}>
                   Total
                 </td>
                 <td className="px-2 py-1.5 text-right font-mono text-[12px] font-medium tabular-nums">
@@ -515,11 +758,15 @@ function GroupingPropertySearch({
   catalog,
   rules,
   disabled,
+  placeholder,
+  wide,
   onPick,
 }: {
   catalog: PropertyCatalogSet[]
   rules: PropertyRef[]
   disabled: boolean
+  placeholder?: string
+  wide?: boolean
   onPick: (ref: PropertyRef) => void
 }) {
   const [search, setSearch] = useState('')
@@ -557,15 +804,18 @@ function GroupingPropertySearch({
   }
 
   return (
-    <div className="relative" ref={rootRef}>
+    <div className="relative z-30" ref={rootRef}>
       <label className="relative block">
         <Search className="pointer-events-none absolute top-2 left-2 h-3.5 w-3.5 text-muted-foreground" />
         <input
-          className="h-7 w-48 rounded border border-border bg-background py-0 pr-2 pl-7 text-[11px] outline-none disabled:opacity-50"
+          className={cn(
+            'h-7 rounded border border-border bg-background py-0 pr-2 pl-7 text-[11px] outline-none disabled:opacity-50',
+            wide ? 'w-64' : 'w-48',
+          )}
           disabled={disabled}
           value={search}
-          placeholder={disabled ? 'Grouping full' : 'Search properties'}
-          aria-label="Search grouping properties"
+          placeholder={disabled ? 'Grouping full' : placeholder || 'Search properties'}
+          aria-label={placeholder || 'Search properties'}
           onFocus={() => {
             if (!disabled) setOpen(true)
           }}
@@ -587,9 +837,13 @@ function GroupingPropertySearch({
         />
       </label>
       {open && !disabled ? (
-        <div className="absolute top-8 left-0 z-20 max-h-56 w-72 overflow-auto rounded border border-border bg-card py-1 shadow-md">
+        <div className="absolute top-8 left-0 z-50 max-h-72 w-80 overflow-auto rounded border border-border bg-card py-1 shadow-lg">
           {groups.length === 0 ? (
-            <p className="px-2.5 py-3 text-[11px] text-muted-foreground italic">No properties match.</p>
+            <p className="px-2.5 py-3 text-[11px] text-muted-foreground italic">
+              {catalog.length === 0 && !search.trim()
+                ? 'No IFC properties yet. ObjectType, Tag, Name and IFC Type are listed when the model is indexed.'
+                : 'No properties match that search.'}
+            </p>
           ) : (
             groups.map((group) => (
               <div key={`${group.kind}:${group.set}`}>

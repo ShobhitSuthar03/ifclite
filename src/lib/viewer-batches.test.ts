@@ -19,6 +19,9 @@ describe('viewer batches', () => {
     const wallTriangle = (column.indices.length / 3) | 0
     expect(group.expressIdAt(mesh, wallTriangle)).toBe(20)
     expect(group.box.isEmpty()).toBe(false)
+    const onlyColumn = group.boxForIds([10])
+    expect(onlyColumn.isEmpty()).toBe(false)
+    expect(onlyColumn.max.x).toBeLessThan(group.box.max.x)
     group.dispose()
   })
 

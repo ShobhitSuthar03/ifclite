@@ -631,7 +631,10 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     const controls = controlsRef.current
     if (!batcher || !camera || !controls || batcher.box.isEmpty()) return
     if (!geometryComplete && fitToken === 0) return
-    applyCameraFitBox(camera, controls, batcher.box)
+    const isolate = viewIsolateRef.current
+    const box = isolate && isolate.size > 0 ? batcher.boxForIds(isolate) : batcher.box
+    if (box.isEmpty()) return
+    applyCameraFitBox(camera, controls, box)
     requestRenderRef.current()
   }, [fitToken, geometryComplete])
 

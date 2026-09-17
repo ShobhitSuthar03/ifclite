@@ -54,6 +54,25 @@ export class ViewerBatchGroup {
     return this.batches.map((batch) => batch.mesh)
   }
 
+  boxForIds(ids: Iterable<number>): THREE.Box3 {
+    const box = new THREE.Box3()
+    const point = new THREE.Vector3()
+    for (const id of ids) {
+      const spans = this.spansById.get(id)
+      if (!spans) continue
+      for (const span of spans) {
+        const positions = span.batch.positions
+        const end = span.vertexStart + span.vertexCount
+        for (let i = span.vertexStart; i < end; i += 1) {
+          const o = i * 3
+          point.set(positions[o], positions[o + 1], positions[o + 2])
+          box.expandByPoint(point)
+        }
+      }
+    }
+    return box
+  }
+
   clear() {
     for (const batch of this.batches) {
       batch.mesh.geometry.dispose()
