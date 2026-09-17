@@ -85,6 +85,38 @@ pub fn read_ifc_bytes(path: String) -> Result<Response, String> {
     Ok(Response::new(bytes))
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalFileStat {
+    pub exists: bool,
+    pub size: u64,
+    pub modified_ms: u64,
+}
+
+#[tauri::command]
+pub fn stat_local_file(path: String) -> Result<LocalFileStat, String> {
+    match fs::metadata(&path) {
+        Ok(meta) => {
+            let modified_ms = meta
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis() as u64)
+                .unwrap_or(0);
+            Ok(LocalFileStat {
+                exists: true,
+                size: meta.len(),
+                modified_ms,
+            })
+        }
+        Err(_) => Ok(LocalFileStat {
+            exists: false,
+            size: 0,
+            modified_ms: 0,
+        }),
+    }
+}
+
 fn hash_bytes(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     hex::encode(digest)

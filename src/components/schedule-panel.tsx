@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { CalendarRange, ChevronDown, ChevronLeft, ChevronRight, Maximize2, Minimize2, Pause, Play, Plus, Square, Upload, X } from 'lucide-react'
+import { CalendarRange, ChevronDown, ChevronLeft, ChevronRight, Layers, ListTree, Maximize2, Minimize2, Pause, Play, Plus, Square, Upload, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ResizeHandle } from '@/components/resize-handle'
 import {
@@ -57,6 +57,8 @@ const CHART_VIEWS = [
 
 type ChartView = (typeof CHART_VIEWS)[number]['id']
 
+export type BottomWorkspaceTab = 'schedule' | 'assemblies' | 'estimation'
+
 type SchedulePanelProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -71,6 +73,12 @@ type SchedulePanelProps = {
   onHeightChange: (height: number) => void
   simDate: Date | null
   onSimDateChange: (date: Date | null) => void
+  workspaceTab?: BottomWorkspaceTab
+  onWorkspaceTabChange?: (tab: BottomWorkspaceTab) => void
+  assemblyCount?: number
+  assemblyPanel?: ReactNode
+  estimationCount?: number
+  showEstimationTab?: boolean
 }
 
 export function ScheduleDock({
@@ -87,11 +95,21 @@ export function ScheduleDock({
   onHeightChange,
   simDate,
   onSimDateChange,
+  workspaceTab = 'schedule',
+  onWorkspaceTabChange,
+  assemblyCount = 0,
+  assemblyPanel,
+  estimationCount = 0,
+  showEstimationTab = false,
 }: SchedulePanelProps) {
   const count = model?.tasks.length ?? 0
   const [chartMax, setChartMax] = useState(false)
   const restoredHeight = useRef(height)
+  const extraPanel = workspaceTab === 'assemblies' ? assemblyPanel : null
+  const extraOpen = extraPanel != null
+  const showSheet = open && workspaceTab !== 'estimation'
   const onChartMaxChange = (next: boolean) => {
+    if (!showSheet || extraOpen) return
     if (next && !chartMax) {
       restoredHeight.current = height
       onHeightChange(Math.round(Math.min(Math.max(window.innerHeight * 0.52, 460), CHART_MAX_HEIGHT)))
@@ -100,12 +118,20 @@ export function ScheduleDock({
     }
     setChartMax(next)
   }
+  const activate = (tab: BottomWorkspaceTab) => {
+    if (open && workspaceTab === tab) {
+      onOpenChange(false)
+      return
+    }
+    onWorkspaceTabChange?.(tab)
+    onOpenChange(true)
+  }
   return (
     <div className="flex shrink-0 flex-col border-t border-border bg-card">
-      {open ? (
+      {showSheet ? (
         <>
           <ResizeHandle
-            label="Resize schedule panel"
+            label={extraOpen ? 'Resize workspace panel' : 'Resize schedule panel'}
             axis="y"
             onDrag={(delta) =>
               onHeightChange(
@@ -118,40 +144,81 @@ export function ScheduleDock({
             }}
           />
           <div className="min-h-0 overflow-hidden" style={{ height }}>
-            <SchedulePanel
-              model={model}
-              loading={loading}
-              selectedTaskId={selectedTaskId}
-              onSelectTask={onSelectTask}
-              onImport={onImport}
-              onReloadIfc={onReloadIfc}
-              canReloadIfc={canReloadIfc}
-              simDate={simDate}
-              onSimDateChange={onSimDateChange}
-              chartMax={chartMax}
-              onChartMaxChange={onChartMaxChange}
-            />
+            {extraOpen ? (
+              extraPanel
+            ) : (
+              <SchedulePanel
+                model={model}
+                loading={loading}
+                selectedTaskId={selectedTaskId}
+                onSelectTask={onSelectTask}
+                onImport={onImport}
+                onReloadIfc={onReloadIfc}
+                canReloadIfc={canReloadIfc}
+                simDate={simDate}
+                onSimDateChange={onSimDateChange}
+                chartMax={chartMax}
+                onChartMaxChange={onChartMaxChange}
+              />
+            )}
           </div>
         </>
       ) : null}
-      <div className="flex h-7 shrink-0 items-center gap-2 border-t border-border bg-muted px-2">
+      <div className="flex h-7 shrink-0 items-center gap-1 border-t border-border bg-muted px-2">
+        <button
+          type="button"
+          className={cn(
+            'flex h-6 items-center gap-1 rounded px-2 text-[11px]',
+            open && workspaceTab === 'schedule'
+              ? 'bg-card text-primary'
+              : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+          )}
+          onClick={() => {
+            const closing = open && workspaceTab === 'schedule'
+            activate('schedule')
+            if (closing) onSimDateChange(null)
+          }}
+        >
+          <CalendarRange className="h-3.5 w-3.5" />
+          Schedule
+          {count > 0 ? <span className="font-mono text-[10px]">{formatCount(count)}</span> : null}
+          <ChevronDown className={cn('h-3 w-3 transition-transform', open && workspaceTab === 'schedule' && 'rotate-180')} />
+        </button>
+        {assemblyPanel != null ? (
           <button
             type="button"
             className={cn(
               'flex h-6 items-center gap-1 rounded px-2 text-[11px]',
-              open ? 'bg-card text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+              open && workspaceTab === 'assemblies'
+                ? 'bg-card text-primary'
+                : 'text-muted-foreground hover:bg-accent hover:text-foreground',
             )}
-            onClick={() => {
-              const next = !open
-              onOpenChange(next)
-              if (!next) onSimDateChange(null)
-            }}
+            onClick={() => activate('assemblies')}
           >
-          <CalendarRange className="h-3.5 w-3.5" />
-          Schedule
-          {count > 0 ? <span className="font-mono text-[10px]">{formatCount(count)}</span> : null}
-          <ChevronDown className={cn('h-3 w-3 transition-transform', open && 'rotate-180')} />
-        </button>
+            <Layers className="h-3.5 w-3.5" />
+            Store
+            {assemblyCount > 0 ? <span className="font-mono text-[10px]">{formatCount(assemblyCount)}</span> : null}
+            <ChevronDown
+              className={cn('h-3 w-3 transition-transform', open && workspaceTab === 'assemblies' && 'rotate-180')}
+            />
+          </button>
+        ) : null}
+        {showEstimationTab ? (
+          <button
+            type="button"
+            className={cn(
+              'flex h-6 items-center gap-1 rounded px-2 text-[11px]',
+              open && workspaceTab === 'estimation'
+                ? 'bg-card text-primary'
+                : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+            )}
+            onClick={() => activate('estimation')}
+          >
+            <ListTree className="h-3.5 w-3.5" />
+            Estimation
+            {estimationCount > 0 ? <span className="font-mono text-[10px]">{formatCount(estimationCount)}</span> : null}
+          </button>
+        ) : null}
       </div>
     </div>
   )

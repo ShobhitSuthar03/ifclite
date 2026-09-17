@@ -89,6 +89,28 @@ describe('project session', () => {
     const legacyViews = JSON.parse(JSON.stringify(emptySession('abc', 'a.ifc'))) as { savedViews?: unknown }
     delete legacyViews.savedViews
     expect(parseSessionJson(JSON.stringify(legacyViews))?.savedViews).toEqual([])
+    const withEstimation = JSON.parse(JSON.stringify(emptySession('abc', 'a.ifc'))) as { estimation?: unknown }
+    withEstimation.estimation = {
+      name: 'Tower A',
+      groupBy: [{ set: 'Attributes', name: 'Storey', kind: 'attribute' }],
+      root: [
+        {
+          id: 'p:L1',
+          name: 'L1',
+          kind: 'item',
+          source: 'property',
+          ids: [3],
+          assemblyId: 'a1',
+          children: [],
+        },
+      ],
+      qtyBindings: {},
+      excludedLines: {},
+    }
+    expect(parseSessionJson(JSON.stringify(withEstimation))?.estimation.boqs[0]?.root[0]?.assemblyId).toBe('a1')
+    const legacyLinks = JSON.parse(JSON.stringify(emptySession('abc', 'a.ifc'))) as { estimation?: unknown }
+    delete legacyLinks.estimation
+    expect(parseSessionJson(JSON.stringify(legacyLinks))?.estimation.boqs[0]?.root).toEqual([])
   })
 
   it('maps leftover Breakdown and Lens tabs onto Filters', () => {

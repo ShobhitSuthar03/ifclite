@@ -14,6 +14,7 @@ import { EMPTY_REPORT_FILTER } from '@/lib/bim-sql'
 import type { QuantityResult } from '@/lib/geometry-qto'
 import { parsePropertyRefs, type PropertyRef } from '@/lib/property-tree'
 import { parseSavedViews, type SavedView } from '@/lib/saved-views'
+import { parseEstimation, emptyEstimation, type EstimationDoc } from '@/lib/estimation'
 
 export type MutationPatch = {
   expressId: number
@@ -45,6 +46,7 @@ export type ProjectSession = {
   mutations: MutationPatch[]
   quantities: QuantityResult | null
   savedViews: SavedView[]
+  estimation: EstimationDoc
 }
 
 export function emptySession(cacheKey = '', fileName = ''): ProjectSession {
@@ -70,6 +72,7 @@ export function emptySession(cacheKey = '', fileName = ''): ProjectSession {
     mutations: [],
     quantities: null,
     savedViews: [],
+    estimation: emptyEstimation(),
   }
 }
 
@@ -102,6 +105,7 @@ export function parseSessionJson(json: string | null | undefined): ProjectSessio
       leftTab,
       filterRules: parsePropertyRefs(parsed.filterRules),
       savedViews: parseSavedViews((parsed as { savedViews?: unknown }).savedViews),
+      estimation: parseEstimation((parsed as { estimation?: unknown }).estimation),
     }
   } catch {
     return null

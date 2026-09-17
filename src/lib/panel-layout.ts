@@ -2,18 +2,22 @@ import { useCallback, useRef, useState } from 'react'
 
 const LEFT_KEY = 'ifclite.leftPanelWidth'
 const RIGHT_KEY = 'ifclite.rightPanelWidth'
+const ESTIMATION_KEY = 'ifclite.estimationPanelWidth'
 export const LEFT_PANEL_DEFAULT = 320
 export const RIGHT_PANEL_DEFAULT = 340
+export const ESTIMATION_PANEL_DEFAULT = 720
 export const PANEL_MIN = 220
 export const PANEL_MAX = 560
+export const ESTIMATION_PANEL_MIN = 480
+export const ESTIMATION_PANEL_MAX = 1200
 export const VIEWPORT_MIN = 280
 
-function readStored(key: string, fallback: number): number {
+function readStored(key: string, fallback: number, min = PANEL_MIN, max = PANEL_MAX): number {
   try {
     const raw = localStorage.getItem(key)
     if (!raw) return fallback
     const value = Number(raw)
-    return Number.isFinite(value) ? clamp(value, PANEL_MIN, PANEL_MAX) : fallback
+    return Number.isFinite(value) ? clamp(value, min, max) : fallback
   } catch {
     return fallback
   }
@@ -38,8 +42,12 @@ function applyWidth(pane: HTMLElement | null, width: number) {
 export function usePanelWidths() {
   const [leftWidth, setLeftWidth] = useState(() => readStored(LEFT_KEY, LEFT_PANEL_DEFAULT))
   const [rightWidth, setRightWidth] = useState(() => readStored(RIGHT_KEY, RIGHT_PANEL_DEFAULT))
+  const [estimationWidth, setEstimationWidth] = useState(() =>
+    readStored(ESTIMATION_KEY, ESTIMATION_PANEL_DEFAULT, ESTIMATION_PANEL_MIN, ESTIMATION_PANEL_MAX),
+  )
   const leftRef = useRef(leftWidth)
   const rightRef = useRef(rightWidth)
+  const estimationRef = useRef(estimationWidth)
 
   const dragLeft = useCallback((delta: number, containerWidth: number, pane: HTMLElement | null) => {
     const max = Math.min(PANEL_MAX, Math.max(PANEL_MIN, containerWidth - rightRef.current - VIEWPORT_MIN))
@@ -81,14 +89,38 @@ export function usePanelWidths() {
     writeStored(RIGHT_KEY, RIGHT_PANEL_DEFAULT)
   }, [])
 
+  const dragEstimation = useCallback((delta: number, containerWidth: number, pane: HTMLElement | null) => {
+    const max = Math.min(ESTIMATION_PANEL_MAX, Math.max(ESTIMATION_PANEL_MIN, containerWidth - VIEWPORT_MIN))
+    const next = clamp(estimationRef.current - delta, ESTIMATION_PANEL_MIN, max)
+    estimationRef.current = next
+    applyWidth(pane, next)
+  }, [])
+
+  const commitEstimation = useCallback(() => {
+    const next = Math.round(estimationRef.current)
+    setEstimationWidth(next)
+    writeStored(ESTIMATION_KEY, next)
+  }, [])
+
+  const resetEstimation = useCallback((pane: HTMLElement | null) => {
+    estimationRef.current = ESTIMATION_PANEL_DEFAULT
+    applyWidth(pane, ESTIMATION_PANEL_DEFAULT)
+    setEstimationWidth(ESTIMATION_PANEL_DEFAULT)
+    writeStored(ESTIMATION_KEY, ESTIMATION_PANEL_DEFAULT)
+  }, [])
+
   return {
     leftWidth,
     rightWidth,
+    estimationWidth,
     dragLeft,
     dragRight,
+    dragEstimation,
     commitLeft,
     commitRight,
+    commitEstimation,
     resetLeft,
     resetRight,
+    resetEstimation,
   }
 }

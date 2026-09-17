@@ -113,9 +113,22 @@ Payloads are camelCase. Mesh arrays use `{ expressId, ifcType?, positions, norma
 ## Other commands
 
 ```bash
+npm run mcp              # MCP sidecar (needs --ifc and --token; the desktop app starts this for you)
 npm run build            # web bundle
 npm run build:desktop    # native installer
 npm run test:native      # Rust host-contract tests
+```
+
+## 5D Estimator MCP
+
+With a project open in the desktop app, a Node sidecar hosts official [`@ifc-lite/mcp`](https://ifclite.dev/docs/guide/mcp/#http-remote-agents) on `http://127.0.0.1:8765` and **preloads** that project's `model.ifc` (HTTP sessions are not left empty). The status bar shows `MCP · 127.0.0.1:8765` when live — click it to copy the URL and bearer token.
+
+Point Cursor at [`.mcp.json`](.mcp.json) and replace `PASTE_TOKEN_FROM_STATUS_BAR`. The app must be running. Extra tools (`assembly_search`, `estimation_*`, `qto_for_ids`, `skip_classify`, `property_search`, `desktop_select` / `desktop_isolate`) read the Cost Assembly Store XML, the live BOQ, and the IFCLite 3D viewer. They are not IFC `cost_data`. Invoke the `estimate_5d` prompt or the [5d-bim-estimator skill](.cursor/skills/5d-bim-estimator/SKILL.md). In-app chat lives at the bottom of the **Estimation** module (API key in Settings).
+
+Manual start:
+
+```bash
+npm run mcp -- --ifc path/to/model.ifc --catalog path/to/Cost Assembly.xml --token <secret>
 ```
 
 ## Layout

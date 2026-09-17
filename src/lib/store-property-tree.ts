@@ -1,4 +1,5 @@
 import {
+  extractEntityAttributesOnDemand,
   extractMaterialsOnDemand,
   extractPropertiesOnDemand,
   extractQuantitiesOnDemand,
@@ -55,6 +56,14 @@ function storeValueLabel(
         material?.name || material?.layers?.[0]?.materialName || material?.materials?.[0]?.name,
         null,
       )
+    }
+    if (ref.name === 'ObjectType' || ref.name === 'Tag') {
+      try {
+        const attrs = extractEntityAttributesOnDemand(store, id)
+        return exactValueLabel(ref.name === 'Tag' ? attrs.tag : attrs.objectType, null)
+      } catch {
+        return exactValueLabel(null, null)
+      }
     }
   }
   if (ref.kind === 'quantity') {

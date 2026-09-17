@@ -42,6 +42,9 @@ export default defineConfig({
     strictPort: true,
     host: '127.0.0.1',
     headers: isolationHeaders,
+    watch: {
+      ignored: ['**/src-tauri/**', '**/.mcp.json', '**/.cursor/**'],
+    },
   },
   preview: {
     port: 43127,

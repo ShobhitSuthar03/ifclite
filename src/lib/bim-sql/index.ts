@@ -15,7 +15,7 @@ export {
 } from '@/lib/bim-sql/restore'
 export { propertyCatalogFromWarehouse, queryWarehouse, groupingCatalog } from '@/lib/bim-sql/catalog'
 export type { PropertyCatalogSet, WarehouseQueryRow } from '@/lib/bim-sql/catalog'
-export { buildWarehousePropertyTree, warehouseScopeIds, loadValueLabels } from '@/lib/bim-sql/property-tree'
+export { buildWarehousePropertyTree, warehouseScopeIds, loadValueLabels, sumNumericValues } from '@/lib/bim-sql/property-tree'
 export {
   REPORT_TEMPLATES,
   GROUP_BY_OPTIONS,

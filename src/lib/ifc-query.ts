@@ -1,6 +1,8 @@
 import { IfcQuery, type ComparisonOperator, type QueryResultEntity } from '@ifc-lite/query'
 import type { IfcDataStore } from '@ifc-lite/parser'
 
+export type { ComparisonOperator }
+
 export type TypeScope = 'all' | 'walls' | 'doors' | 'windows' | 'slabs' | 'columns' | 'beams' | 'spaces'
 
 export type PropertyClause = {

@@ -30,3 +30,8 @@ src-tauri/gen
 
 # Agent scratch
 agent-tools
+
+# Live Cursor MCP token (written by the sidecar)
+.mcp.json
+.cursor/mcp.json
+tmp-mcp-*

@@ -1,5 +1,5 @@
 import { useEffect, useState, type MutableRefObject } from 'react'
-import { Calculator } from 'lucide-react'
+import { Calculator, Plug } from 'lucide-react'
 import { cn, formatBytes, formatCount } from '@/lib/utils'
 import type { GeometryEngineStatus, LoadProgress, LoadResult } from '@/lib/ifc-loader'
 
@@ -22,6 +22,10 @@ type StatusBarProps = {
   reportBusy?: boolean
   reportProgress?: { done: number; total: number } | null
   onOpenQuantities: () => void
+  mcpUrl?: string | null
+  mcpReady?: boolean
+  mcpError?: string | null
+  mcpToken?: string | null
 }
 
 function HoverLabel({
@@ -63,6 +67,10 @@ export function StatusBar({
   reportBusy = false,
   reportProgress = null,
   onOpenQuantities,
+  mcpUrl = null,
+  mcpReady = false,
+  mcpError = null,
+  mcpToken = null,
 }: StatusBarProps) {
         const processed = progress?.processed ?? result?.totalMeshes ?? 0
   const total = progress?.total ?? result?.totalMeshes ?? 0
@@ -120,6 +128,29 @@ export function StatusBar({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-2">
+        {mcpUrl ? (
+          <button
+            type="button"
+            title={mcpError ?? 'Copy MCP URL and bearer token for .mcp.json'}
+            className={cn(
+              'flex h-7 max-w-[240px] items-center gap-1 truncate rounded border px-2 text-[11px]',
+              mcpError
+                ? 'border-destructive/40 bg-background text-destructive'
+                : mcpReady
+                  ? 'border-primary bg-card text-primary'
+                  : 'border-border bg-background text-muted-foreground',
+            )}
+            onClick={() => {
+              const lines = mcpToken
+                ? `${mcpUrl}\nAuthorization: Bearer ${mcpToken}`
+                : mcpUrl
+              void navigator.clipboard.writeText(lines)
+            }}
+          >
+            <Plug className="h-3.5 w-3.5" />
+            {mcpError ? 'MCP failed' : mcpReady ? `MCP · ${mcpUrl.replace(/^https?:\/\//, '')}` : 'MCP starting…'}
+          </button>
+        ) : null}
         {result && (
           <>
             <button

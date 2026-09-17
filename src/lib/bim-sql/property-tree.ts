@@ -15,6 +15,8 @@ type AttributeRow = {
   name: string | null
   storey_name: string | null
   material: string | null
+  object_type: string | null
+  tag: string | null
 }
 
 type PropRow = {
@@ -43,7 +45,7 @@ export function loadValueLabels(db: BimDatabase, ref: PropertyRef, ids: number[]
   if (ref.kind === 'attribute') {
     for (const row of all<AttributeRow>(
       db,
-      'SELECT express_id, ifc_type, name, storey_name, material FROM elements',
+      'SELECT express_id, ifc_type, name, storey_name, material, object_type, tag FROM elements',
     )) {
       if (!scope.has(row.express_id)) continue
       labels.set(row.express_id, attributeLabel(ref.name, row))
@@ -73,6 +75,47 @@ export function loadValueLabels(db: BimDatabase, ref: PropertyRef, ids: number[]
   return labels
 }
 
+export function sumNumericValues(db: BimDatabase, ref: PropertyRef, ids: number[]): number {
+  if (ids.length === 0) return 0
+  const scope = new Set(ids)
+  let sum = 0
+  try {
+    if (ref.kind === 'quantity') {
+      for (const row of all<QtyRow>(db, 'SELECT express_id, value FROM quantities WHERE qset = ? AND name = ?', [
+        ref.set,
+        ref.name,
+      ])) {
+        if (!scope.has(row.express_id) || row.value == null || !Number.isFinite(row.value)) continue
+        sum += row.value
+      }
+      return sum
+    }
+    if (ref.kind === 'property') {
+      for (const row of all<PropRow>(
+        db,
+        'SELECT express_id, value, numeric_value FROM element_properties WHERE pset = ? AND name = ?',
+        [ref.set, ref.name],
+      )) {
+        if (!scope.has(row.express_id)) continue
+        const n = numericFromStored(row.value, row.numeric_value)
+        if (n != null) sum += n
+      }
+    }
+  } catch (caught) {
+    console.warn('Warehouse numeric sum failed', caught)
+  }
+  return sum
+}
+
+function numericFromStored(value: string | null, numeric: number | null): number | null {
+  if (numeric != null && Number.isFinite(numeric)) return numeric
+  if (!value) return null
+  const match = value.trim().replace(',', '.').match(/-?\d+(?:\.\d+)?/)
+  if (!match) return null
+  const n = Number(match[0])
+  return Number.isFinite(n) ? n : null
+}
+
 export function buildWarehousePropertyTree(
   db: BimDatabase,
   rules: PropertyRef[],
@@ -96,6 +139,8 @@ function attributeLabel(name: string, row: AttributeRow): string {
   if (name === 'Storey') return exactValueLabel(row.storey_name, null)
   if (name === 'Name') return exactValueLabel(row.name, null)
   if (name === 'Material') return exactValueLabel(row.material, null)
+  if (name === 'ObjectType') return exactValueLabel(row.object_type, null)
+  if (name === 'Tag') return exactValueLabel(row.tag, null)
   return exactValueLabel(null, null)
 }
 

@@ -13,6 +13,7 @@
     "preview": "vite preview --host 127.0.0.1 --port 43127",
     "lint": "oxlint",
     "test": "vitest run",
+    "mcp": "tsx --tsconfig tsconfig.mcp.json scripts/mcp-host.ts",
     "tauri": "tauri",
     "test:native": "cargo test --manifest-path src-tauri/Cargo.toml --offline || cargo test --manifest-path src-tauri/Cargo.toml"
   },
@@ -21,6 +22,7 @@
     "@ifc-lite/export": "^4.3.3",
     "@ifc-lite/geometry": "^7.0.2",
     "@ifc-lite/lens": "^1.19.1",
+    "@ifc-lite/mcp": "^0.17.0",
     "@ifc-lite/mutations": "^2.3.0",
     "@ifc-lite/parser": "^6.5.0",
     "@ifc-lite/query": "^2.4.0",
@@ -39,7 +41,8 @@
     "react-dom": "^19.2.8",
     "sql.js": "^1.14.2",
     "tailwind-merge": "^3.3.1",
-    "three": "^0.180.0"
+    "three": "^0.180.0",
+    "tsx": "^4.23.13"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.12",

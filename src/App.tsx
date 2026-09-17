@@ -10,7 +10,10 @@ import { StatusBar } from '@/components/status-bar'
 import { useTheme } from '@/components/theme-provider'
 import { ToolStrip } from '@/components/tool-strip'
 import { ViewerCanvas } from '@/components/viewer-canvas'
-import { ScheduleDock, SCHEDULE_PANEL_DEFAULT_HEIGHT } from '@/components/schedule-panel'
+import { ScheduleDock, SCHEDULE_PANEL_DEFAULT_HEIGHT, type BottomWorkspaceTab } from '@/components/schedule-panel'
+import { CostAssemblyPanel } from '@/components/cost-assembly-panel'
+import { EstimationPanel } from '@/components/estimation-panel'
+import { AssemblyBuildUp } from '@/components/assembly-buildup'
 import {
   buildDataStore,
   buildSpatialTreeFromStore,
@@ -103,6 +106,7 @@ import {
   propertyCatalogFromWarehouse,
   queryWarehouse,
   buildWarehousePropertyTree,
+  sumNumericValues,
   type BimDatabase,
   type FilterOptions,
   type GroupByField,
@@ -148,6 +152,38 @@ import { extractProductResources } from '@/lib/schedule/resource-load'
 import { activityTint } from '@/lib/schedule/activity-color'
 import { productWindows, simulateAt } from '@/lib/schedule/simulate'
 import type { GanttModel, GanttTask } from '@/lib/schedule/types'
+import {
+  DEFAULT_COST_ASSEMBLY_PATH,
+  loadCostAssemblyCatalog,
+  parsePickedCostAssembly,
+  pickCostAssemblyFile,
+  statLocalFile,
+} from '@/lib/cost-assembly/load'
+import type { CostAssembly, CostAssemblyCatalog } from '@/lib/cost-assembly/types'
+import {
+  activeBoq,
+  emptyEstimation,
+  findBoqNode,
+  flattenBoq,
+  mapActiveBoq,
+  qtyBindingKey,
+  quantityForIds,
+  rebuildBoq,
+  type EstimationDoc,
+  type QtyBinding,
+} from '@/lib/estimation'
+import { isDesktopShell } from '@/lib/host'
+import { EstimatorAgentPanel } from '@/components/estimator-agent-panel'
+import { searchModelElements } from '@/lib/estimator-tools/model-search'
+import type { PropertySearchInput, ViewerAction } from '@/lib/estimator-tools'
+import {
+  getEstimatorSync,
+  joinProjectFile,
+  postEstimatorSync,
+  startMcpHost,
+  stopMcpHost,
+  waitForMcpReady,
+} from '@/lib/mcp/host'
 import { createViewerMeshStore } from '@/lib/viewer-meshes'
 import { typeTreeFromMeshes, uniqueIfcTypeTree } from '@/lib/geometry-tree'
 import { labelStorePropertyChunk, STORE_PROPERTY_CHUNK } from '@/lib/store-property-tree'
@@ -291,10 +327,30 @@ export default function App() {
   const [mutationPatches, setMutationPatches] = useState<MutationPatch[]>([])
   const [scheduleOpen, setScheduleOpen] = useState(false)
   const [scheduleHeight, setScheduleHeight] = useState(SCHEDULE_PANEL_DEFAULT_HEIGHT)
+  const [bottomTab, setBottomTab] = useState<BottomWorkspaceTab>('schedule')
   const [ifcGantt, setIfcGantt] = useState<GanttModel | null>(null)
   const [importedGantt, setImportedGantt] = useState<GanttModel | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [simDate, setSimDate] = useState<Date | null>(null)
+  const [assemblyCatalog, setAssemblyCatalog] = useState<CostAssemblyCatalog | null>(null)
+  const [assemblyError, setAssemblyError] = useState<string | null>(null)
+  const [assemblyLoading, setAssemblyLoading] = useState(false)
+  const [assemblyPath, setAssemblyPath] = useState(DEFAULT_COST_ASSEMBLY_PATH)
+  const [selectedAssemblyId, setSelectedAssemblyId] = useState<string | null>(null)
+  const [estimation, setEstimation] = useState<EstimationDoc>(() => emptyEstimation())
+  const [selectedBoqId, setSelectedBoqId] = useState<string | null>(null)
+  const [estimationStoreTree, setEstimationStoreTree] = useState<PropertyTreeNode[]>([])
+  const [buildUpHeight, setBuildUpHeight] = useState(280)
+  const [estimatorHeight, setEstimatorHeight] = useState(240)
+  const [mcp, setMcp] = useState<{
+    url: string
+    token: string
+    syncPort: number
+    ready: boolean
+    error: string | null
+  } | null>(null)
+  const mcpRevision = useRef(0)
+  const applyingAgentSync = useRef(false)
   const [geometryStore] = useState(createViewerMeshStore)
   const loadGen = useRef(0)
   const pendingSession = useRef<ProjectSession | null>(null)
@@ -303,19 +359,43 @@ export default function App() {
   const pendingParse = useRef(false)
   const facePositionCache = useRef<Map<number, ElementQuantity>>(new Map())
   const lastLoadSource = useRef<LoadSource | null>(null)
+  const assemblyPathRef = useRef(assemblyPath)
+  assemblyPathRef.current = assemblyPath
+  const assemblyStampRef = useRef(0)
   const warehouseRestored = useRef(false)
   const warehouseBuild = useRef(false)
   const takeoffGen = useRef(0)
   const quantitiesRef = useRef<QuantityResult | null>(null)
+  const runTakeoffRef = useRef<(ids: number[], key: string) => void>(() => {})
+  const quantityBusyRef = useRef(false)
+  const applyAgentViewerRef = useRef<(action: ViewerAction) => void>(() => {})
+  const searchElementsRef = useRef<(input: PropertySearchInput) => ReturnType<typeof searchModelElements>>(
+    () => ({ ids: [], hits: [], truncated: false }),
+  )
+  const viewerBusyRef = useRef(false)
+  const searchBusyRef = useRef(false)
   const rowRef = useRef<HTMLDivElement>(null)
   const leftPaneRef = useRef<HTMLDivElement>(null)
   const rightPaneRef = useRef<HTMLDivElement>(null)
+  const estimationPaneRef = useRef<HTMLDivElement>(null)
   const hoverBindRef = useRef<((id: number | null) => void) | null>(null)
   const hoverLookupRef = useRef<(id: number) => string>(() => '')
   const mutationPatchesRef = useRef<MutationPatch[]>([])
   mutationPatchesRef.current = mutationPatches
-  const { leftWidth, rightWidth, dragLeft, dragRight, commitLeft, commitRight, resetLeft, resetRight } =
-    usePanelWidths()
+  const {
+    leftWidth,
+    rightWidth,
+    estimationWidth,
+    dragLeft,
+    dragRight,
+    dragEstimation,
+    commitLeft,
+    commitRight,
+    commitEstimation,
+    resetLeft,
+    resetRight,
+    resetEstimation,
+  } = usePanelWidths()
   const { theme } = useTheme()
 
   useEffect(() => subscribeGeometryEngine(setEngineStatus), [])
@@ -334,6 +414,8 @@ export default function App() {
     setFollowViewer(session.followViewer)
     setMutationPatches(session.mutations)
     setSavedViews(session.savedViews ?? [])
+    setEstimation(session.estimation ?? emptyEstimation())
+    setSelectedBoqId(null)
     setActiveViewId(null)
   }, [])
 
@@ -598,6 +680,9 @@ export default function App() {
     setFilterNodeIds(null)
     setStoreFilterTree([])
     setSavedViews([])
+    setEstimation(emptyEstimation())
+    setSelectedBoqId(null)
+    setEstimationStoreTree([])
     setActiveViewId(null)
     setExportingViewId(null)
     setIfcGantt(null)
@@ -605,6 +690,8 @@ export default function App() {
     setSelectedTaskId(null)
     setSimDate(null)
     setScheduleOpen(false)
+    setBottomTab('schedule')
+    setSelectedAssemblyId(null)
     setLeftTab('tree')
     setRightTab('properties')
 
@@ -704,11 +791,11 @@ export default function App() {
   }, [store, warehouse, busy, parsing, warehouseBusy, sceneReady, result])
 
   useEffect(() => {
-    if (!scheduleOpen || store || parsing || busy || !sceneReady || !result) return
+    if (!scheduleOpen || bottomTab !== 'schedule' || store || parsing || busy || !sceneReady || !result) return
     if (pendingParse.current) return
     pendingParse.current = true
     setParseTick((tick) => tick + 1)
-  }, [scheduleOpen, store, parsing, busy, sceneReady, result])
+  }, [scheduleOpen, bottomTab, store, parsing, busy, sceneReady, result])
 
   useEffect(() => {
     if (!sceneReady || !result || store || warehouse) return
@@ -795,6 +882,9 @@ export default function App() {
     setFilterNodeIds(null)
     setStoreFilterTree([])
     setSavedViews([])
+    setEstimation(emptyEstimation())
+    setSelectedBoqId(null)
+    setEstimationStoreTree([])
     setActiveViewId(null)
     setExportingViewId(null)
     setIfcGantt(null)
@@ -802,6 +892,8 @@ export default function App() {
     setSelectedTaskId(null)
     setSimDate(null)
     setScheduleOpen(false)
+    setBottomTab('schedule')
+    setSelectedAssemblyId(null)
     setLeftTab('tree')
     setRightTab('properties')
     void recycleCsvProcessor()
@@ -847,6 +939,7 @@ export default function App() {
           mutations: mutationPatches,
           quantities: persistableQuantities(quantities),
           savedViews,
+          estimation,
         }
         await saveProjectSession(session)
       }
@@ -882,6 +975,7 @@ export default function App() {
     mutationPatches,
     quantities,
     savedViews,
+    estimation,
     clearViewer,
     refreshProjects,
   ])
@@ -1125,6 +1219,7 @@ export default function App() {
         mutations: mutationPatches,
         quantities: persistableQuantities(quantities),
         savedViews,
+        estimation,
       }
       void saveProjectSession(session).catch((caught) => {
         console.warn('Could not save session.json', caught)
@@ -1151,6 +1246,7 @@ export default function App() {
     mutationPatches,
     quantities,
     savedViews,
+    estimation,
   ])
 
   const onViewerSceneReady = useCallback(() => setSceneReady(true), [])
@@ -1344,6 +1440,7 @@ export default function App() {
       setImportedGantt(next)
       setSelectedTaskId(null)
       setSimDate(null)
+      setBottomTab('schedule')
       setScheduleOpen(true)
       if (next.warnings.length > 0) {
         console.group('Schedule import warnings')
@@ -1364,6 +1461,189 @@ export default function App() {
       setParseTick((tick) => tick + 1)
     }
   }, [store])
+
+  const loadAssemblies = useCallback(async (path?: string) => {
+    const nextPath = path ?? assemblyPathRef.current
+    setAssemblyLoading(true)
+    try {
+      const catalog = await loadCostAssemblyCatalog(nextPath)
+      assemblyStampRef.current = catalog.modifiedMs
+      setAssemblyCatalog(catalog)
+      setAssemblyPath(catalog.sourcePath)
+      setAssemblyError(null)
+      setSelectedAssemblyId((current) =>
+        current && catalog.assemblies.some((item) => item.id === current) ? current : null,
+      )
+    } catch (caught) {
+      setAssemblyCatalog(null)
+      setAssemblyError(caught instanceof Error ? caught.message : String(caught))
+    } finally {
+      setAssemblyLoading(false)
+    }
+  }, [])
+
+  const onOpenAssemblyFile = useCallback(async () => {
+    const file = await pickCostAssemblyFile()
+    if (!file) return
+    setAssemblyLoading(true)
+    try {
+      const catalog = parsePickedCostAssembly(file)
+      assemblyStampRef.current = catalog.modifiedMs
+      setAssemblyCatalog(catalog)
+      setAssemblyPath(file.path)
+      setAssemblyError(null)
+      setSelectedAssemblyId(null)
+    } catch (caught) {
+      setAssemblyCatalog(null)
+      setAssemblyError(caught instanceof Error ? caught.message : String(caught))
+    } finally {
+      setAssemblyLoading(false)
+    }
+  }, [])
+
+  const onSelectAssembly = useCallback((assembly: CostAssembly) => {
+    setSelectedAssemblyId(assembly.id)
+  }, [])
+
+  const onShowBoq = useCallback((ids: number[]) => {
+    if (ids.length === 0) return
+    const next = new Set(ids)
+    setSelectedIds(next)
+    setSelectedId(ids[0] ?? null)
+    setDisplayMode('isolate')
+    setFocusIds(next)
+    setHiddenIds(new Set())
+    setActiveViewId(null)
+  }, [])
+
+  const applyAgentViewer = useCallback((action: ViewerAction) => {
+    if (action.kind === 'select') {
+      setFollowViewer(true)
+      setSelectedIds((current) => {
+        const next = action.additive ? new Set(current) : new Set<number>()
+        for (const id of action.ids) next.add(id)
+        return next
+      })
+      setSelectedId(action.ids[0] ?? null)
+      return
+    }
+    if (action.kind === 'isolate') {
+      if (action.ids.length === 0) return
+      const next = new Set(action.ids)
+      setFollowViewer(true)
+      setSelectedIds(next)
+      setSelectedId(action.ids[0] ?? null)
+      setDisplayMode(action.mode)
+      setFocusIds(next)
+      setHiddenIds(new Set())
+      setActiveViewId(null)
+      setFitToken((token) => token + 1)
+      return
+    }
+    if (action.kind === 'show_all') {
+      setDisplayMode('all')
+      setFocusIds(new Set())
+      setHiddenIds(new Set())
+      setTreeScopeIds(null)
+      setFilterNodeKeys([])
+      setFilterNodeIds(null)
+      setSimDate(null)
+      return
+    }
+    setFitToken((token) => token + 1)
+  }, [])
+  applyAgentViewerRef.current = applyAgentViewer
+
+  const searchElementsForAgent = useCallback(
+    (input: PropertySearchInput) =>
+      searchModelElements({
+        warehouse,
+        store,
+        meshes: geometryStore.list(),
+        input,
+      }),
+    [warehouse, store, geometryStore],
+  )
+  searchElementsRef.current = searchElementsForAgent
+
+  useEffect(() => {
+    if (!result) return
+    void loadAssemblies()
+  }, [result, loadAssemblies])
+
+  useEffect(() => {
+    if (!scheduleOpen || bottomTab !== 'assemblies' || !isDesktopShell()) return
+    const timer = window.setInterval(() => {
+      void (async () => {
+        const stat = await statLocalFile(assemblyPathRef.current)
+        if (!stat.exists || !stat.modifiedMs) return
+        if (stat.modifiedMs !== assemblyStampRef.current) void loadAssemblies()
+      })()
+    }, 2500)
+    return () => window.clearInterval(timer)
+  }, [scheduleOpen, bottomTab, loadAssemblies])
+
+  useEffect(() => {
+    if (!isDesktopShell() || !project) {
+      setMcp(null)
+      void stopMcpHost()
+      return
+    }
+    const snapshot = project as ProjectSnapshot
+    const ifcPath =
+      snapshot.modelPath ??
+      (snapshot.folderPath ? joinProjectFile(snapshot.folderPath, snapshot.modelFile ?? 'model.ifc') : null)
+    if (!ifcPath) {
+      setMcp(null)
+      void stopMcpHost()
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const started = await startMcpHost({
+          ifcPath,
+          catalogPath: assemblyPathRef.current,
+          sessionPath: joinProjectFile(snapshot.folderPath, 'session.json'),
+          quantitiesPath: joinProjectFile(snapshot.folderPath, 'quantities.json'),
+        })
+        if (cancelled) {
+          await stopMcpHost()
+          return
+        }
+        mcpRevision.current = 0
+        setMcp({
+          url: started.url,
+          token: started.token,
+          syncPort: started.syncPort,
+          ready: false,
+          error: null,
+        })
+        const health = await waitForMcpReady(started.syncPort)
+        if (cancelled) return
+        setMcp((current) =>
+          current
+            ? { ...current, ready: health.ready, error: health.error }
+            : current,
+        )
+      } catch (caught) {
+        if (cancelled) return
+        const message = caught instanceof Error ? caught.message : String(caught)
+        setMcp({
+          url: 'http://127.0.0.1:8765',
+          token: '',
+          syncPort: 8766,
+          ready: false,
+          error: message,
+        })
+      }
+    })()
+    return () => {
+      cancelled = true
+      setMcp(null)
+      void stopMcpHost()
+    }
+  }, [project])
 
   const entity: EntityData | null = useMemo(() => {
     if (selectedId == null) return null
@@ -1440,7 +1720,8 @@ export default function App() {
   const queryIsolatedIds = queryState.ids
   const groupingUiOpen =
     leftTab === 'filters' || leftTab === 'views' || mobileTab === 'filters' || mobileTab === 'views'
-  const propertiesUiOpen = groupingUiOpen
+  const estimationUiOpen = scheduleOpen && bottomTab === 'estimation'
+  const propertiesUiOpen = groupingUiOpen || estimationUiOpen
   const filterUiOpen = groupingUiOpen || filterColorize
 
   const filterTree = useMemo(() => {
@@ -1530,6 +1811,232 @@ export default function App() {
       cancelAnimationFrame(frame)
     }
   }, [warehouse, store, filterRules, leftTab, mobileTab, filterColorize, allExpressIds, mutationTick, mutationPatches])
+
+  const estimationSheet = useMemo(() => activeBoq(estimation), [estimation])
+  const estimationGroupBy = estimationSheet.groupBy
+  useEffect(() => {
+    if (warehouse || !estimationUiOpen || estimationGroupBy.length === 0) {
+      setEstimationStoreTree((current) => (current.length === 0 ? current : []))
+      return
+    }
+    if (estimationGroupBy.length === 1 && isIfcTypeRef(estimationGroupBy[0])) {
+      setEstimationStoreTree((current) => (current.length === 0 ? current : []))
+      return
+    }
+    if (!store) {
+      setEstimationStoreTree((current) => (current.length === 0 ? current : []))
+      return
+    }
+    const overlay = overlayFromPatches(mutationPatches)
+    const ids = allExpressIds
+    const layers = estimationGroupBy.map(() => new Map<number, string>())
+    let index = 0
+    let cancelled = false
+    let frame = 0
+    const pump = () => {
+      if (cancelled) return
+      const end = Math.min(index + STORE_PROPERTY_CHUNK, ids.length)
+      for (let ruleIndex = 0; ruleIndex < estimationGroupBy.length; ruleIndex += 1) {
+        labelStorePropertyChunk(store, estimationGroupBy[ruleIndex], ids, index, end, layers[ruleIndex], overlay)
+      }
+      index = end
+      setEstimationStoreTree(nestByValues(ids.slice(0, index), layers))
+      if (index < ids.length) frame = requestAnimationFrame(pump)
+    }
+    frame = requestAnimationFrame(pump)
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(frame)
+    }
+  }, [
+    warehouse,
+    store,
+    estimationUiOpen,
+    estimationGroupBy,
+    allExpressIds,
+    mutationTick,
+    mutationPatches,
+  ])
+
+  const estimationPreviewTree = useMemo(() => {
+    if (!estimationUiOpen || estimationGroupBy.length === 0) return []
+    if (warehouse) return buildWarehousePropertyTree(warehouse, estimationGroupBy, spec)
+    if (estimationGroupBy.length === 1 && isIfcTypeRef(estimationGroupBy[0])) {
+      return uniqueIfcTypeTree(geometryStore.list())
+    }
+    return estimationStoreTree
+  }, [
+    estimationUiOpen,
+    estimationGroupBy,
+    warehouse,
+    spec,
+    estimationStoreTree,
+    geometryStore,
+    geometryGen,
+    reportTick,
+    mutationTick,
+  ])
+
+  const onBuildEstimation = useCallback(() => {
+    setEstimation((current) =>
+      mapActiveBoq(current, (boq) => ({
+        ...boq,
+        root: rebuildBoq(estimationPreviewTree, boq.root),
+      })),
+    )
+  }, [estimationPreviewTree])
+
+  const selectedBoq = useMemo(
+    () => findBoqNode(estimationSheet.root, selectedBoqId),
+    [estimationSheet.root, selectedBoqId],
+  )
+  const selectedBoqAssembly = useMemo(() => {
+    if (!selectedBoq?.assemblyId || !assemblyCatalog) return null
+    return assemblyCatalog.assemblies.find((item) => item.id === selectedBoq.assemblyId) ?? null
+  }, [selectedBoq, assemblyCatalog])
+  const selectedBoqQty = useMemo(() => {
+    if (!selectedBoq || !selectedBoqAssembly) return null
+    return quantityForIds(selectedBoq.ids, selectedBoqAssembly.uom, quantities).qty
+  }, [selectedBoq, selectedBoqAssembly, quantities])
+
+  useEffect(() => {
+    if (!mcp?.ready) return
+    if (applyingAgentSync.current) return
+    const timer = window.setTimeout(() => {
+      mcpRevision.current += 1
+      void postEstimatorSync(mcp.syncPort, {
+        revision: mcpRevision.current,
+        estimation,
+        selectedIds: [...selectedIds],
+        quantities,
+        previewTree: estimationPreviewTree,
+        catalogPath: assemblyPath,
+        catalogSummary: assemblyCatalog
+          ? {
+              path: assemblyCatalog.sourcePath,
+              name: assemblyCatalog.sourceName,
+              catalogName: assemblyCatalog.catalogName,
+              assemblyCount: assemblyCatalog.assemblies.length,
+            }
+          : null,
+        elementHints: selectedEntities.map((item) => ({
+          id: item.expressId,
+          ifcType: item.ifcType,
+          name: item.name,
+        })),
+      })
+        .then((result) => {
+          mcpRevision.current = result.snapshot.revision
+          if (!result.accepted) {
+            applyingAgentSync.current = true
+            setEstimation(result.snapshot.estimation)
+            window.setTimeout(() => {
+              applyingAgentSync.current = false
+            }, 0)
+          }
+        })
+        .catch((caught) => {
+          console.warn('MCP sync POST failed', caught)
+        })
+    }, 500)
+    return () => window.clearTimeout(timer)
+  }, [
+    mcp?.ready,
+    mcp?.syncPort,
+    estimation,
+    selectedIds,
+    quantities,
+    estimationPreviewTree,
+    assemblyPath,
+    assemblyCatalog,
+    selectedEntities,
+  ])
+
+  useEffect(() => {
+    if (!mcp?.ready) return
+    const timer = window.setInterval(() => {
+      void getEstimatorSync(mcp.syncPort)
+        .then((snap) => {
+          if (snap.pendingTakeoffIds?.length && !quantityBusyRef.current) {
+            runTakeoffRef.current(snap.pendingTakeoffIds, `mcp-qto:${snap.pendingTakeoffIds.join(',')}`)
+          }
+          if (snap.pendingViewer?.length && !viewerBusyRef.current) {
+            viewerBusyRef.current = true
+            for (const action of snap.pendingViewer) applyAgentViewerRef.current(action)
+            void postEstimatorSync(mcp.syncPort, {
+              revision: mcpRevision.current,
+              consumedViewer: snap.pendingViewer.length,
+            })
+              .catch(() => undefined)
+              .finally(() => {
+                viewerBusyRef.current = false
+              })
+          }
+          if (snap.pendingSearch && !searchBusyRef.current) {
+            searchBusyRef.current = true
+            const result = searchElementsRef.current(snap.pendingSearch)
+            void postEstimatorSync(mcp.syncPort, {
+              revision: mcpRevision.current,
+              searchResults: result,
+            })
+              .catch(() => undefined)
+              .finally(() => {
+                searchBusyRef.current = false
+              })
+          }
+          if (snap.origin !== 'agent' || snap.revision <= mcpRevision.current) return
+          applyingAgentSync.current = true
+          mcpRevision.current = snap.revision
+          const preview = estimationPreviewTree
+          setEstimation(() => {
+            const next = snap.estimation
+            const sheet = activeBoq(next)
+            if (preview.length > 0 && sheet.groupBy.length > 0) {
+              return mapActiveBoq(next, (boq) => ({ ...boq, root: rebuildBoq(preview, boq.root) }))
+            }
+            return next
+          })
+          void postEstimatorSync(mcp.syncPort, {
+            revision: snap.revision,
+            force: true,
+            estimation: snap.estimation,
+            selectedIds: [...selectedIds],
+            quantities,
+            previewTree: preview,
+            catalogPath: assemblyPath,
+          }).catch(() => undefined)
+          window.setTimeout(() => {
+            applyingAgentSync.current = false
+          }, 0)
+        })
+        .catch(() => undefined)
+    }, 500)
+    return () => window.clearInterval(timer)
+  }, [mcp?.ready, mcp?.syncPort, estimationPreviewTree, selectedIds, quantities, assemblyPath])
+  const measureBoqIfc = useCallback(
+    (ref: PropertyRef) => {
+      if (!warehouse || !selectedBoq) return 0
+      return sumNumericValues(warehouse, ref, selectedBoq.ids)
+    },
+    [warehouse, selectedBoq],
+  )
+  const onBindBuildUpQty = useCallback(
+    (rowId: string, binding: QtyBinding) => {
+      if (!selectedBoqAssembly) return
+      const key = qtyBindingKey(selectedBoqAssembly.id, rowId)
+      setEstimation((current) =>
+        mapActiveBoq(current, (boq) => ({
+          ...boq,
+          qtyBindings: { ...(boq.qtyBindings ?? {}), [key]: binding },
+        })),
+      )
+    },
+    [selectedBoqAssembly],
+  )
+  const onExcludedBuildUpChange = useCallback((excludedLines: Record<string, boolean>) => {
+    setEstimation((current) => mapActiveBoq(current, (boq) => ({ ...boq, excludedLines })))
+  }, [])
+
   const simWindows = useMemo(
     () => (scheduleModel?.hasSchedule ? productWindows(scheduleModel.tasks) : null),
     [scheduleModel],
@@ -1806,6 +2313,18 @@ export default function App() {
     },
     [geometryStore, store, warehouseLookup, persistQuantities],
   )
+  runTakeoffRef.current = runTakeoff
+  quantityBusyRef.current = quantityBusy
+
+  const ensureAgentTakeoff = useCallback(async (ids: number[]) => {
+    runTakeoff(ids, `agent:${ids.join(',')}`)
+    const started = Date.now()
+    while (Date.now() - started < 60_000) {
+      const have = new Set(quantitiesRef.current?.elements.map((item) => item.expressId) ?? [])
+      if (ids.every((id) => have.has(id))) return
+      await new Promise((resolve) => window.setTimeout(resolve, 200))
+    }
+  }, [runTakeoff])
 
   const getElementFaces = useCallback(
     (expressId: number): ElementQuantity | null => {
@@ -2244,21 +2763,30 @@ export default function App() {
         onToggleFaceSelectMode={() => setFaceSelectMode((value) => !value)}
       />
       <div ref={rowRef} className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        {estimationUiOpen ? null : (
+          <>
+            <div
+              ref={leftPaneRef}
+              className="hidden min-h-0 overflow-hidden lg:flex lg:shrink-0"
+              style={{ width: leftWidth }}
+            >
+              <LeftDock tab={leftTab} onTabChange={setLeftTab} {...leftDock} />
+            </div>
+            <ResizeHandle
+              label="Resize left panel"
+              onDrag={(delta) => dragLeft(delta, rowRef.current?.clientWidth || window.innerWidth, leftPaneRef.current)}
+              onDragEnd={commitLeft}
+              onReset={() => resetLeft(leftPaneRef.current)}
+            />
+          </>
+        )}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div
-          ref={leftPaneRef}
-          className="hidden min-h-0 overflow-hidden lg:flex lg:shrink-0"
-          style={{ width: leftWidth }}
-        >
-          <LeftDock tab={leftTab} onTabChange={setLeftTab} {...leftDock} />
-        </div>
-        <ResizeHandle
-          label="Resize left panel"
-          onDrag={(delta) => dragLeft(delta, rowRef.current?.clientWidth || window.innerWidth, leftPaneRef.current)}
-          onDragEnd={commitLeft}
-          onReset={() => resetLeft(leftPaneRef.current)}
-        />
-        <div
-          className="relative min-h-[48vh] min-w-0 flex-1 lg:min-h-0"
+          key="main-viewer"
+          className={cn(
+            'relative min-w-0 flex-1',
+            estimationUiOpen ? 'min-h-0' : 'min-h-[36vh] lg:min-h-0',
+          )}
           onDragOver={(event) => {
             event.preventDefault()
             setDragActive(true)
@@ -2298,49 +2826,154 @@ export default function App() {
             />
           )}
         </div>
-        <ResizeHandle
-          label="Resize right panel"
-          onDrag={(delta) => dragRight(delta, rowRef.current?.clientWidth || window.innerWidth, rightPaneRef.current)}
-          onDragEnd={commitRight}
-          onReset={() => resetRight(rightPaneRef.current)}
-        />
-        <div
-          ref={rightPaneRef}
-          className="hidden min-h-0 overflow-hidden lg:flex lg:shrink-0"
-          style={{ width: rightWidth }}
-        >
-          <RightDock tab={rightTab} onTabChange={setRightTab} {...rightDock} />
+        {estimationUiOpen ? (
+          <>
+            <ResizeHandle
+              axis="y"
+              label="Resize assembly build-up"
+              onDrag={(delta) => setBuildUpHeight((height) => Math.min(480, Math.max(160, height - delta)))}
+              onReset={() => setBuildUpHeight(280)}
+            />
+            <div className="min-h-0 shrink-0 overflow-hidden border-t border-border" style={{ height: buildUpHeight }}>
+              <AssemblyBuildUp
+                assembly={selectedBoqAssembly}
+                elementIds={selectedBoq?.ids ?? []}
+                assemblyQty={selectedBoqQty}
+                quantities={quantities}
+                propertyCatalog={propertyCatalog}
+                bindings={estimationSheet.qtyBindings ?? {}}
+                excludedLines={estimationSheet.excludedLines ?? {}}
+                onBind={onBindBuildUpQty}
+                onExcludedChange={onExcludedBuildUpChange}
+                measureIfc={measureBoqIfc}
+                emptyHint={
+                  selectedBoq
+                    ? 'Assign an assembly on this BOQ line to see labour, material and plant.'
+                    : 'Select a BOQ line to see the assembly cost build-up.'
+                }
+              />
+            </div>
+          </>
+        ) : null}
         </div>
-        <div className="flex min-h-0 flex-col border-t border-border lg:hidden">
-          <div className="flex overflow-x-auto">
-            {mobileTabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                className={cn(
-                  'shrink-0 border-b px-3 py-2 text-[12px]',
-                  mobileTab === tab.id
-                    ? 'border-primary text-primary'
-                    : 'border-transparent text-muted-foreground',
+        {estimationUiOpen ? (
+          <>
+            <ResizeHandle
+              label="Resize estimation panel"
+              onDrag={(delta) =>
+                dragEstimation(delta, rowRef.current?.clientWidth || window.innerWidth, estimationPaneRef.current)
+              }
+              onDragEnd={commitEstimation}
+              onReset={() => resetEstimation(estimationPaneRef.current)}
+            />
+            <div
+              ref={estimationPaneRef}
+              className="flex min-h-0 min-w-0 flex-1 flex-col border-t border-border max-lg:!w-full lg:flex-none lg:border-t-0 lg:border-l"
+              style={{ width: estimationWidth }}
+            >
+              <div className="min-h-0 flex-1 overflow-hidden">
+              <EstimationPanel
+                doc={estimation}
+                previewTree={estimationPreviewTree}
+                catalog={assemblyCatalog}
+                propertyCatalog={propertyCatalog}
+                quantities={quantities}
+                selectedIds={selectedIds}
+                selectedId={selectedBoqId}
+                hint={
+                  !result
+                    ? 'Open a model first.'
+                    : parsing || warehouseBusy
+                      ? 'Reading properties…'
+                      : estimationGroupBy.length > 0 && estimationPreviewTree.length === 0
+                        ? 'No groups yet — wait for properties or pick another field.'
+                        : null
+                }
+                onChange={setEstimation}
+                onSelect={(node) => setSelectedBoqId(node?.id ?? null)}
+                onBuild={onBuildEstimation}
+                onShow={onShowBoq}
+              />
+              </div>
+              <ResizeHandle
+                axis="y"
+                label="Resize estimator chat"
+                onDrag={(delta) => setEstimatorHeight((height) => Math.min(420, Math.max(140, height - delta)))}
+                onReset={() => setEstimatorHeight(240)}
+              />
+              <div className="min-h-0 shrink-0 overflow-hidden border-t border-border" style={{ height: estimatorHeight }}>
+                <EstimatorAgentPanel
+                  mcpReady={Boolean(mcp?.ready)}
+                  mcpUrl={mcp?.url ?? null}
+                  syncPort={mcp?.ready ? mcp.syncPort : null}
+                  catalog={assemblyCatalog}
+                  catalogPath={assemblyPath}
+                  estimation={estimation}
+                  onEstimationChange={setEstimation}
+                  quantities={quantities}
+                  selectedIds={[...selectedIds]}
+                  previewTree={estimationPreviewTree}
+                  hints={selectedEntities.map((item) => ({
+                    id: item.expressId,
+                    ifcType: item.ifcType,
+                    name: item.name,
+                  }))}
+                  selectionLabel={selectedLabel ?? (selectedId != null ? `#${selectedId}` : 'no selection')}
+                  ensureQuantities={ensureAgentTakeoff}
+                  applyViewer={applyAgentViewer}
+                  searchElements={async (input) => searchElementsForAgent(input)}
+                />
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <ResizeHandle
+              label="Resize right panel"
+              onDrag={(delta) => dragRight(delta, rowRef.current?.clientWidth || window.innerWidth, rightPaneRef.current)}
+              onDragEnd={commitRight}
+              onReset={() => resetRight(rightPaneRef.current)}
+            />
+            <div
+              ref={rightPaneRef}
+              className="hidden min-h-0 overflow-hidden lg:flex lg:shrink-0"
+              style={{ width: rightWidth }}
+            >
+              <RightDock tab={rightTab} onTabChange={setRightTab} {...rightDock} />
+            </div>
+            <div className="flex min-h-0 flex-col border-t border-border lg:hidden">
+              <div className="flex overflow-x-auto">
+                {mobileTabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    className={cn(
+                      'shrink-0 border-b px-3 py-2 text-[12px]',
+                      mobileTab === tab.id
+                        ? 'border-primary text-primary'
+                        : 'border-transparent text-muted-foreground',
+                    )}
+                    onClick={() => setMobileTab(tab.id)}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              <div className="h-72">
+                {mobileTab === 'properties' ||
+                mobileTab === 'export' ||
+                mobileTab === 'quantities' ||
+                mobileTab === 'dashboard' ? (
+                  <RightDock tab={mobileTab} onTabChange={setMobileTab} showTabs={false} {...rightDock} />
+                ) : (
+                  <LeftDock tab={mobileTab} onTabChange={setMobileTab} showTabs={false} {...leftDock} />
                 )}
-                onClick={() => setMobileTab(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          <div className="h-72">
-            {mobileTab === 'properties' ||
-            mobileTab === 'export' ||
-            mobileTab === 'quantities' ||
-            mobileTab === 'dashboard' ? (
-              <RightDock tab={mobileTab} onTabChange={setMobileTab} showTabs={false} {...rightDock} />
-            ) : (
-              <LeftDock tab={mobileTab} onTabChange={setMobileTab} showTabs={false} {...leftDock} />
-            )}
-          </div>
-        </div>
+              </div>
+            </div>
+          </>
+        )}
       </div>
+
       {result ? (
         <ScheduleDock
           open={scheduleOpen}
@@ -2348,8 +2981,10 @@ export default function App() {
             setScheduleOpen(open)
             if (!open) setSimDate(null)
           }}
+          workspaceTab={bottomTab}
+          onWorkspaceTabChange={setBottomTab}
           model={scheduleModel}
-          loading={scheduleOpen && parsing && !scheduleModel?.hasSchedule}
+          loading={scheduleOpen && bottomTab === 'schedule' && parsing && !scheduleModel?.hasSchedule}
           selectedTaskId={selectedTaskId}
           onSelectTask={onSelectScheduleTask}
           onImport={() => void onImportSchedule()}
@@ -2359,6 +2994,20 @@ export default function App() {
           onHeightChange={setScheduleHeight}
           simDate={simDate}
           onSimDateChange={setSimDate}
+          assemblyCount={assemblyCatalog?.assemblies.length ?? 0}
+          assemblyPanel={
+            <CostAssemblyPanel
+              catalog={assemblyCatalog}
+              loading={assemblyLoading}
+              error={assemblyError}
+              selectedId={selectedAssemblyId}
+              onSelect={onSelectAssembly}
+              onReload={() => void loadAssemblies()}
+              onOpenFile={() => void onOpenAssemblyFile()}
+            />
+          }
+          estimationCount={estimation.boqs.reduce((sum, boq) => sum + flattenBoq(boq.root).length, 0)}
+          showEstimationTab
         />
       ) : null}
         </>
@@ -2382,6 +3031,10 @@ export default function App() {
         reportBusy={reportBusy}
         reportProgress={warehouseProgress}
         onOpenQuantities={onOpenQuantities}
+        mcpUrl={mcp?.url ?? null}
+        mcpReady={Boolean(mcp?.ready)}
+        mcpError={mcp?.error ?? null}
+        mcpToken={mcp?.token ?? null}
       />
     </div>
   )
