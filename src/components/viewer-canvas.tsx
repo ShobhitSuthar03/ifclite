@@ -21,7 +21,7 @@ import {
   toggleFaceLayer,
   type FaceLayer,
 } from '@/lib/geometry-qto/overlay-mesh'
-import { isAdditiveModifier } from '@/lib/selection'
+import { applyClickSelection, isAdditiveModifier, setsEqual, touchedSelectionIds } from '@/lib/selection'
 import { VIEWPORT_THEME, type Theme } from '@/lib/theme'
 
 const DRAG_THRESHOLD_PX = 4
@@ -32,6 +32,49 @@ function packedLook(hidden: boolean, selected: boolean, hovered: boolean, ghost:
   if (hovered) return ELEMENT_HOVER
   if (ghost) return ELEMENT_GHOST
   return ELEMENT_SOLID
+}
+
+function lookForId(
+  id: number,
+  hoveredId: number | null,
+  selectedIds: Set<number>,
+  isolatedIds: Set<number> | null,
+  hiddenIds: Set<number>,
+  ghostIds: Set<number>,
+  viewIsolateIds: Set<number> | null,
+  overlayIds: Set<number> | null,
+): number {
+  const overlayOn = overlayIds != null && overlayIds.has(id)
+  const hidden = hiddenIds.has(id) || (viewIsolateIds != null && !viewIsolateIds.has(id))
+  const ghost =
+    !hidden && (ghostIds.has(id) || overlayOn || (isolatedIds != null && !isolatedIds.has(id)))
+  const selected = selectedIds.has(id) && !overlayOn
+  return packedLook(hidden, selected, hoveredId === id && !selected, ghost)
+}
+
+function rgbChanged(
+  previous: [number, number, number, number] | undefined,
+  next: [number, number, number, number] | undefined,
+): boolean {
+  if (previous == null && next == null) return false
+  if (previous == null || next == null) return true
+  return previous[0] !== next[0] || previous[1] !== next[1] || previous[2] !== next[2]
+}
+
+function touchedSimLookIds(
+  previousIsolate: Set<number>,
+  nextIsolate: Set<number>,
+  previousColors: Map<number, [number, number, number, number]>,
+  nextColors: Map<number, [number, number, number, number]>,
+): Set<number> {
+  const touched = new Set<number>()
+  for (const id of previousIsolate) if (!nextIsolate.has(id)) touched.add(id)
+  for (const id of nextIsolate) if (!previousIsolate.has(id)) touched.add(id)
+  for (const [id, color] of nextColors) {
+    if (rgbChanged(previousColors.get(id), color)) touched.add(id)
+  }
+  for (const id of previousColors.keys()) if (!nextColors.has(id)) touched.add(id)
+  return touched
 }
 
 type ViewerCanvasProps = {
@@ -94,10 +137,6 @@ export const ViewerCanvas = memo(function ViewerCanvas({
   }, [geometry, geometryComplete])
   const meshes = geometry.list()
 
-  useEffect(() => {
-    setFaceLayers(new Set(['all']))
-  }, [selectedIds])
-
   // Elements currently shown by the overlay - independent of selection, since the
   // overlay reflects the last calculation, not the current pick.
   const overlayIds = useMemo(() => {
@@ -113,17 +152,19 @@ export const ViewerCanvas = memo(function ViewerCanvas({
   const modelGroupRef = useRef<THREE.Group | null>(null)
   const overlayGroupRef = useRef<THREE.Group | null>(null)
   const basketGroupRef = useRef<THREE.Group | null>(null)
-  const gridRef = useRef<THREE.GridHelper | null>(null)
   const sceneRef = useRef<THREE.Scene | null>(null)
   const meshIndexRef = useRef(0)
   const batcherRef = useRef<ViewerBatchGroup | null>(null)
   const selectedIdsRef = useRef(selectedIds)
+  const prevSelectedRef = useRef(selectedIds)
   const hoveredRef = useRef<number | null>(null)
   const isolatedRef = useRef<Set<number> | null>(null)
   const hiddenRef = useRef<Set<number>>(new Set())
   const ghostRef = useRef<Set<number>>(new Set())
   const viewIsolateRef = useRef<Set<number> | null>(null)
   const overlayIdsRef = useRef<Set<number> | null>(null)
+  const prevSimIsolateRef = useRef<Set<number> | null>(null)
+  const prevSimColorsRef = useRef<Map<number, [number, number, number, number]> | null>(null)
   const geometryCompleteRef = useRef(geometryComplete)
   const onSelectRef = useRef(onSelect)
   const onHoverRef = useRef(onHover)
@@ -195,10 +236,6 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     fill.position.set(-30, 10, -20)
     scene.add(fill)
 
-    const grid = new THREE.GridHelper(60, 30, colors.gridMajor, colors.gridMinor)
-    grid.position.y = 0
-    scene.add(grid)
-
     const modelGroup = new THREE.Group()
     modelGroup.name = 'ifc-model'
     scene.add(modelGroup)
@@ -220,7 +257,6 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     modelGroupRef.current = modelGroup
     overlayGroupRef.current = overlayGroup
     basketGroupRef.current = basketGroup
-    gridRef.current = grid
     sceneRef.current = scene
     appliedThemeRef.current = themeRef.current
     meshIndexRef.current = 0
@@ -260,15 +296,17 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     let hoverRaf = 0
     let lastHoverAt = 0
 
-    const lookOf = (id: number, hoveredId: number | null) => {
-      const overlayOn = overlayIdsRef.current != null && overlayIdsRef.current.has(id)
-      const hidden =
-        hiddenRef.current.has(id) || (viewIsolateRef.current != null && !viewIsolateRef.current.has(id))
-      const ghost =
-        !hidden && (ghostRef.current.has(id) || overlayOn || (isolatedRef.current != null && !isolatedRef.current.has(id)))
-      const selected = selectedIdsRef.current.has(id) && !overlayOn
-      return packedLook(hidden, selected, hoveredId === id && !selected, ghost)
-    }
+    const lookOf = (id: number, hoveredId: number | null) =>
+      lookForId(
+        id,
+        hoveredId,
+        selectedIdsRef.current,
+        isolatedRef.current,
+        hiddenRef.current,
+        ghostRef.current,
+        viewIsolateRef.current,
+        overlayIdsRef.current,
+      )
 
     const setElementLook = (id: number | null, hoveredId: number | null) => {
       if (id == null) return
@@ -382,7 +420,14 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     const onClick = (event: MouseEvent) => {
       if (didDrag) return
       const hit = pickAt(event.clientX, event.clientY)
-      onSelectRef.current(hit?.expressId ?? null, isAdditiveModifier(event))
+      const additive = isAdditiveModifier(event)
+      const next = applyClickSelection(selectedIdsRef.current, hit?.expressId ?? null, additive)
+      if (!setsEqual(next, selectedIdsRef.current)) {
+        const previous = selectedIdsRef.current
+        selectedIdsRef.current = next
+        for (const id of touchedSelectionIds(previous, next)) setElementLook(id, hoveredRef.current)
+      }
+      onSelectRef.current(hit?.expressId ?? null, additive)
       onSelectFaceRef.current?.(hit?.faceId ?? null)
       if (hit && hit.point && hit.normal) {
         onFaceCandidateRef.current?.({ expressId: hit.expressId, point: hit.point, normal: hit.normal })
@@ -427,23 +472,12 @@ export const ViewerCanvas = memo(function ViewerCanvas({
   useEffect(() => {
     const renderer = rendererRef.current
     const scene = sceneRef.current
-    const grid = gridRef.current
-    if (!renderer || !scene || !grid) return
+    if (!renderer || !scene) return
     if (appliedThemeRef.current === theme) return
     appliedThemeRef.current = theme
     const colors = VIEWPORT_THEME[theme]
     renderer.setClearColor(colors.clear, 1)
     scene.background = new THREE.Color(colors.clear)
-    const next = new THREE.GridHelper(60, 30, colors.gridMajor, colors.gridMinor)
-    next.position.copy(grid.position)
-    next.scale.copy(grid.scale)
-    scene.remove(grid)
-    grid.geometry.dispose()
-    const material = grid.material
-    if (Array.isArray(material)) material.forEach((item) => item.dispose())
-    else material.dispose()
-    scene.add(next)
-    gridRef.current = next
     requestRenderRef.current()
   }, [theme])
 
@@ -483,22 +517,60 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     overlayIdsRef.current = overlayIds
     const batcher = batcherRef.current
     if (!batcher) return
-    for (const id of geometry.ids()) {
-      const overlayOn = overlayIds != null && overlayIds.has(id)
-      const hidden = hiddenIds.has(id) || (viewIsolateIds != null && !viewIsolateIds.has(id))
-      const ghost =
-        !hidden && (ghostIds.has(id) || overlayOn || (isolatedIds != null && !isolatedIds.has(id)))
-      const selected = selectedIds.has(id) && !overlayOn
-      const hovered = hoveredRef.current === id && !selected
-      batcher.setElementState(id, packedLook(hidden, selected, hovered, ghost))
+    const previousIsolate = prevSimIsolateRef.current
+    const previousColors = prevSimColorsRef.current
+    const canDelta =
+      previousIsolate != null &&
+      viewIsolateIds != null &&
+      previousColors != null &&
+      colorOverrides != null
+    const ids = canDelta
+      ? touchedSimLookIds(previousIsolate, viewIsolateIds, previousColors, colorOverrides)
+      : geometry.ids()
+    for (const id of ids) {
+      batcher.setElementState(
+        id,
+        lookForId(
+          id,
+          hoveredRef.current,
+          selectedIdsRef.current,
+          isolatedIds,
+          hiddenIds,
+          ghostIds,
+          viewIsolateIds,
+          overlayIds,
+        ),
+      )
       const override = colorOverrides?.get(id)
       batcher.setElementColor(id, override ? [override[0], override[1], override[2]] : null)
     }
+    prevSimIsolateRef.current = viewIsolateIds
+    prevSimColorsRef.current = colorOverrides ?? null
     requestRenderRef.current()
-  }, [isolatedIds, hiddenIds, ghostIds, viewIsolateIds, overlayIds, colorOverrides, geometryComplete, geometry, selectedIds])
+  }, [isolatedIds, hiddenIds, ghostIds, viewIsolateIds, overlayIds, colorOverrides, geometryComplete, geometry])
 
   useEffect(() => {
+    const previous = prevSelectedRef.current
+    prevSelectedRef.current = selectedIds
     selectedIdsRef.current = selectedIds
+    const batcher = batcherRef.current
+    if (!batcher) return
+    for (const id of touchedSelectionIds(previous, selectedIds)) {
+      batcher.setElementState(
+        id,
+        lookForId(
+          id,
+          hoveredRef.current,
+          selectedIds,
+          isolatedRef.current,
+          hiddenRef.current,
+          ghostRef.current,
+          viewIsolateRef.current,
+          overlayIdsRef.current,
+        ),
+      )
+    }
+    requestRenderRef.current()
   }, [selectedIds])
 
   useEffect(() => {
@@ -514,7 +586,7 @@ export const ViewerCanvas = memo(function ViewerCanvas({
       clearObject3d(group)
       faceOutlineRef.current = null
     }
-  }, [overlayFaces, selectedIds, faceLayers])
+  }, [overlayFaces, faceLayers])
 
   useEffect(() => {
     const group = overlayGroupRef.current
@@ -557,14 +629,9 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     const batcher = batcherRef.current
     const camera = cameraRef.current
     const controls = controlsRef.current
-    const grid = gridRef.current
     if (!batcher || !camera || !controls || batcher.box.isEmpty()) return
     if (!geometryComplete && fitToken === 0) return
-    const fitted = applyCameraFitBox(camera, controls, batcher.box)
-    if (!fitted || !grid) return
-    grid.position.y = batcher.box.min.y
-    const scale = Math.max(fitted.maxDim * 2, 8) / 60
-    grid.scale.setScalar(scale)
+    applyCameraFitBox(camera, controls, batcher.box)
     requestRenderRef.current()
   }, [fitToken, geometryComplete])
 

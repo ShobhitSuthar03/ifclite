@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyClickSelection, isAdditiveModifier, setsEqual } from '@/lib/selection'
+import { applyClickSelection, isAdditiveModifier, setsEqual, touchedSelectionIds } from '@/lib/selection'
 
 describe('isAdditiveModifier', () => {
   it('is true for ctrl, meta, or shift', () => {
@@ -25,5 +25,15 @@ describe('applyClickSelection', () => {
   it('keeps the set when additive-clicking empty space', () => {
     const current = new Set([1, 2])
     expect(setsEqual(applyClickSelection(current, null, true), current)).toBe(true)
+  })
+})
+
+describe('touchedSelectionIds', () => {
+  it('returns only ids that appeared or disappeared', () => {
+    expect(touchedSelectionIds(new Set([1, 2]), new Set([2, 3])).sort()).toEqual([1, 3])
+  })
+
+  it('is empty when the sets match', () => {
+    expect(touchedSelectionIds(new Set([4, 5]), new Set([5, 4]))).toEqual([])
   })
 })

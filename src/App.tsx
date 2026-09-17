@@ -10,6 +10,7 @@ import { StatusBar } from '@/components/status-bar'
 import { useTheme } from '@/components/theme-provider'
 import { ToolStrip } from '@/components/tool-strip'
 import { ViewerCanvas } from '@/components/viewer-canvas'
+import { ScheduleDock, SCHEDULE_PANEL_DEFAULT_HEIGHT } from '@/components/schedule-panel'
 import {
   buildDataStore,
   buildSpatialTreeFromStore,
@@ -139,6 +140,14 @@ import {
   type ProjectSession,
 } from '@/lib/project-session'
 import { createSavedView, replaceSavedViewIds, viewFileStem, type SavedView } from '@/lib/saved-views'
+import { extractGanttFromStore } from '@/lib/schedule/from-ifc'
+import { importScheduleFile } from '@/lib/schedule/import'
+import { applyTaskCosts, extractTaskCosts } from '@/lib/schedule/cost'
+import { pickScheduleFile } from '@/lib/schedule/pick'
+import { extractProductResources } from '@/lib/schedule/resource-load'
+import { activityTint } from '@/lib/schedule/activity-color'
+import { productWindows, simulateAt } from '@/lib/schedule/simulate'
+import type { GanttModel, GanttTask } from '@/lib/schedule/types'
 import { createViewerMeshStore } from '@/lib/viewer-meshes'
 import { typeTreeFromMeshes, uniqueIfcTypeTree } from '@/lib/geometry-tree'
 import { labelStorePropertyChunk, STORE_PROPERTY_CHUNK } from '@/lib/store-property-tree'
@@ -146,6 +155,7 @@ import { labelStorePropertyChunk, STORE_PROPERTY_CHUNK } from '@/lib/store-prope
 type MobileTab = LeftTab | RightTab
 
 const MAX_RESTORED_QUANTITIES_CHARS = 4_000_000
+const EMPTY_EXPRESS_IDS = new Set<number>()
 
 /**
  * Which of an element's faces a raw 3D click landed on, using the face's own plane
@@ -279,6 +289,12 @@ export default function App() {
   const [desktopHost, setDesktopHost] = useState(() => projectsAvailable())
   const [homeOpen, setHomeOpen] = useState(() => projectsAvailable())
   const [mutationPatches, setMutationPatches] = useState<MutationPatch[]>([])
+  const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [scheduleHeight, setScheduleHeight] = useState(SCHEDULE_PANEL_DEFAULT_HEIGHT)
+  const [ifcGantt, setIfcGantt] = useState<GanttModel | null>(null)
+  const [importedGantt, setImportedGantt] = useState<GanttModel | null>(null)
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const [simDate, setSimDate] = useState<Date | null>(null)
   const [geometryStore] = useState(createViewerMeshStore)
   const loadGen = useRef(0)
   const pendingSession = useRef<ProjectSession | null>(null)
@@ -584,6 +600,11 @@ export default function App() {
     setSavedViews([])
     setActiveViewId(null)
     setExportingViewId(null)
+    setIfcGantt(null)
+    setImportedGantt(null)
+    setSelectedTaskId(null)
+    setSimDate(null)
+    setScheduleOpen(false)
     setLeftTab('tree')
     setRightTab('properties')
 
@@ -649,6 +670,12 @@ export default function App() {
         if (cancelled || loadGen.current !== gen) return
         setStore(nextStore)
         setSpatialRoot(buildSpatialTreeFromStore(nextStore))
+        try {
+          setIfcGantt(extractGanttFromStore(nextStore))
+        } catch (caught) {
+          console.warn('IFC schedule extract failed', caught)
+          setIfcGantt(null)
+        }
       } catch (caught) {
         if (!cancelled && loadGen.current === gen) {
           pendingParse.current = false
@@ -675,6 +702,13 @@ export default function App() {
     }, 250)
     return () => window.clearTimeout(timer)
   }, [store, warehouse, busy, parsing, warehouseBusy, sceneReady, result])
+
+  useEffect(() => {
+    if (!scheduleOpen || store || parsing || busy || !sceneReady || !result) return
+    if (pendingParse.current) return
+    pendingParse.current = true
+    setParseTick((tick) => tick + 1)
+  }, [scheduleOpen, store, parsing, busy, sceneReady, result])
 
   useEffect(() => {
     if (!sceneReady || !result || store || warehouse) return
@@ -763,6 +797,11 @@ export default function App() {
     setSavedViews([])
     setActiveViewId(null)
     setExportingViewId(null)
+    setIfcGantt(null)
+    setImportedGantt(null)
+    setSelectedTaskId(null)
+    setSimDate(null)
+    setScheduleOpen(false)
     setLeftTab('tree')
     setRightTab('properties')
     void recycleCsvProcessor()
@@ -1000,8 +1039,8 @@ export default function App() {
       return next
     })
     if (expressId != null) {
-      setMobileTab('properties')
-      setRightTab('properties')
+      setMobileTab((tab) => (tab === 'properties' ? tab : 'properties'))
+      setRightTab((tab) => (tab === 'properties' ? tab : 'properties'))
     }
   }, [])
 
@@ -1255,6 +1294,77 @@ export default function App() {
     setActiveViewId((current) => (current === view.id ? null : current))
   }, [])
 
+  const scheduleModel = useMemo(() => {
+    const model = importedGantt ?? ifcGantt
+    if (!model || importedGantt || !store || !model.hasSchedule) return model
+    return { ...model, tasks: applyTaskCosts(model.tasks, extractTaskCosts(store)) }
+  }, [importedGantt, ifcGantt, store])
+
+  useEffect(() => {
+    if (!store || !ifcGantt?.hasSchedule) return
+    const needsCalendars = ifcGantt.calendars == null
+    if (needsCalendars) {
+      setIfcGantt(extractGanttFromStore(store))
+      return
+    }
+    const needsResources = !ifcGantt.productResources
+    const needsCost = !ifcGantt.tasks.some((task) => task.cost != null)
+    if (!needsResources && !needsCost) return
+    const ids = ifcGantt.tasks.flatMap((task) => task.productExpressIds)
+    setIfcGantt({
+      ...ifcGantt,
+      productResources: needsResources ? extractProductResources(store, ids) : ifcGantt.productResources,
+      tasks: needsCost ? applyTaskCosts(ifcGantt.tasks, extractTaskCosts(store)) : ifcGantt.tasks,
+    })
+  }, [store, ifcGantt])
+
+  const onSelectScheduleTask = useCallback((task: GanttTask) => {
+    setSelectedTaskId(task.id)
+    if (task.productExpressIds.length === 0) return
+    const ids = new Set(task.productExpressIds)
+    setSelectedIds(ids)
+    setSelectedId(task.productExpressIds[0] ?? null)
+    setFollowViewer(true)
+    setDisplayMode('ghost')
+    setFocusIds(ids)
+  }, [])
+
+  const onImportSchedule = useCallback(async () => {
+    const file = await pickScheduleFile()
+    if (!file) return
+    const current = importedGantt ?? ifcGantt
+    if (current?.hasSchedule) {
+      const ok = window.confirm(
+        'Replace the schedule in this panel? The IFC file on disk is not changed.',
+      )
+      if (!ok) return
+    }
+    try {
+      const next = importScheduleFile(file.bytes, file.name)
+      setImportedGantt(next)
+      setSelectedTaskId(null)
+      setSimDate(null)
+      setScheduleOpen(true)
+      if (next.warnings.length > 0) {
+        console.group('Schedule import warnings')
+        for (const warning of next.warnings) console.warn(warning.code, warning.message)
+        console.groupEnd()
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught))
+    }
+  }, [importedGantt, ifcGantt])
+
+  const onReloadIfcSchedule = useCallback(() => {
+    setImportedGantt(null)
+    setSelectedTaskId(null)
+    setSimDate(null)
+    if (!store && !pendingParse.current) {
+      pendingParse.current = true
+      setParseTick((tick) => tick + 1)
+    }
+  }, [store])
+
   const entity: EntityData | null = useMemo(() => {
     if (selectedId == null) return null
     const type =
@@ -1270,6 +1380,7 @@ export default function App() {
   const selectedEntities = useMemo(() => {
     void mutationTick
     if (selectedIds.size === 0) return []
+    if (selectedIds.size === 1 && entity && selectedIds.has(entity.expressId)) return [entity]
     const typeById = new Map(selectedMeshes.map((mesh) => [mesh.expressId, mesh.ifcType]))
     return [...selectedIds].map((id) => {
       const type =
@@ -1280,7 +1391,7 @@ export default function App() {
       const base = readEntity(store, warehouse, id, type)
       return mutationView ? overlayEntityData(base, mutationView) : base
     })
-  }, [selectedIds, selectedMeshes, store, warehouse, warehouseLookup, mutationView, mutationTick])
+  }, [entity, selectedIds, selectedMeshes, store, warehouse, warehouseLookup, mutationView, mutationTick])
 
   const selectedLabel = useMemo(() => {
     if (selectedIds.size > 1) return `${selectedIds.size} selected`
@@ -1419,14 +1530,45 @@ export default function App() {
       cancelAnimationFrame(frame)
     }
   }, [warehouse, store, filterRules, leftTab, mobileTab, filterColorize, allExpressIds, mutationTick, mutationPatches])
-  const viewIsolateIds = displayMode === 'isolate' ? focusIds : null
-  const ghostIds = useMemo(
-    () => ghostExpressIds(displayMode, focusIds, allExpressIds, isolatedIds, hiddenIds),
-    [displayMode, focusIds, allExpressIds, isolatedIds, hiddenIds],
+  const simWindows = useMemo(
+    () => (scheduleModel?.hasSchedule ? productWindows(scheduleModel.tasks) : null),
+    [scheduleModel],
   )
+  const simLook = useMemo(() => {
+    if (!simDate || !simWindows) return null
+    return simulateAt(simWindows, allExpressIds, simDate)
+  }, [simDate, simWindows, allExpressIds])
+  const simColorMap = useMemo(() => {
+    if (!simLook) return null
+    const map = new Map<number, [number, number, number, number]>()
+    for (const id of simLook.active) {
+      map.set(id, activityTint(simLook.activityOf.get(id) ?? 'Activity', false))
+    }
+    for (const id of simLook.done) {
+      map.set(id, activityTint(simLook.activityOf.get(id) ?? 'Activity', true))
+    }
+    return map
+  }, [simLook])
+  const simIsolateIds = useMemo(() => {
+    if (!simLook) return null
+    const ids = new Set(simLook.done)
+    for (const id of simLook.active) ids.add(id)
+    return ids
+  }, [simLook])
+  const viewIsolateIds = simIsolateIds ?? (displayMode === 'isolate' ? focusIds : null)
+  const ghostIds = useMemo(() => {
+    if (simLook) return EMPTY_EXPRESS_IDS
+    return ghostExpressIds(displayMode, focusIds, allExpressIds, isolatedIds, hiddenIds)
+  }, [simLook, displayMode, focusIds, allExpressIds, isolatedIds, hiddenIds])
   const visibleIds = useMemo(
-    () => visibleExpressIds(allExpressIds, isolatedIds, viewIsolateIds, hiddenIds),
-    [allExpressIds, isolatedIds, viewIsolateIds, hiddenIds],
+    () =>
+      visibleExpressIds(
+        allExpressIds,
+        isolatedIds,
+        displayMode === 'isolate' ? focusIds : null,
+        hiddenIds,
+      ),
+    [allExpressIds, isolatedIds, displayMode, focusIds, hiddenIds],
   )
 
   const onShowAll = useCallback(() => {
@@ -1436,6 +1578,7 @@ export default function App() {
     setTreeScopeIds(null)
     setFilterNodeKeys([])
     setFilterNodeIds(null)
+    setSimDate(null)
   }, [])
 
   const onHideSelected = useCallback(() => {
@@ -1866,7 +2009,7 @@ export default function App() {
     selectedIds,
     isolatedIds,
     parsing,
-    onSelect: (id: number, additive?: boolean) => onSelect(id, additive),
+    onSelect,
     spec,
     matchCount: filterNodeIds?.size ?? null,
     filterError: queryState.error,
@@ -2088,7 +2231,7 @@ export default function App() {
         hasSelection={selectedIds.size > 0}
         displayMode={displayMode}
         hiddenCount={hiddenIds.size}
-        canShowAll={displayMode !== 'all' || hiddenIds.size > 0 || treeScopeIds != null}
+        canShowAll={displayMode !== 'all' || hiddenIds.size > 0 || treeScopeIds != null || simDate != null}
         calculatedView={calculatedView}
         canShowCalculatedView={quantities != null || quantityBusy}
         faceSelectMode={faceSelectMode}
@@ -2136,7 +2279,7 @@ export default function App() {
               geometryComplete={!busy && result != null}
               onSceneReady={onViewerSceneReady}
               selectedIds={selectedIds}
-              isolatedIds={isolatedIds}
+              isolatedIds={simLook ? null : isolatedIds}
               hiddenIds={hiddenIds}
               ghostIds={ghostIds}
               viewIsolateIds={viewIsolateIds}
@@ -2145,7 +2288,7 @@ export default function App() {
               fitToken={fitToken}
               theme={theme}
               overlayFaces={overlayFaces}
-              colorOverrides={filterColorMap}
+              colorOverrides={simColorMap ?? filterColorMap}
               selectedFaceId={selectedFaceId}
               onSelectFace={onSelectFace}
               basketFaces={faceBasketList.length > 0 ? faceBasketList : null}
@@ -2198,6 +2341,26 @@ export default function App() {
           </div>
         </div>
       </div>
+      {result ? (
+        <ScheduleDock
+          open={scheduleOpen}
+          onOpenChange={(open) => {
+            setScheduleOpen(open)
+            if (!open) setSimDate(null)
+          }}
+          model={scheduleModel}
+          loading={scheduleOpen && parsing && !scheduleModel?.hasSchedule}
+          selectedTaskId={selectedTaskId}
+          onSelectTask={onSelectScheduleTask}
+          onImport={() => void onImportSchedule()}
+          onReloadIfc={onReloadIfcSchedule}
+          canReloadIfc={Boolean(importedGantt) || Boolean(store)}
+          height={scheduleHeight}
+          onHeightChange={setScheduleHeight}
+          simDate={simDate}
+          onSimDateChange={setSimDate}
+        />
+      ) : null}
         </>
       )}
       <StatusBar

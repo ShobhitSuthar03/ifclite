@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { ChevronRight, Search } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
@@ -7,6 +7,7 @@ import {
   type IfcDataStore,
   type SpatialTreeNode,
 } from '@/lib/ifc-data'
+import { elementTreeLabel } from '@/lib/element-label'
 import { collectNodeElementIds } from '@/lib/spatial-scope'
 import { isAdditiveModifier } from '@/lib/selection'
 import { cn, formatCount } from '@/lib/utils'
@@ -36,6 +37,7 @@ export function SpatialTree({
 }: SpatialTreeProps) {
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const labelCache = useMemo(() => new Map<number, string>(), [store, root])
 
   useEffect(() => {
     if (!root) {
@@ -64,8 +66,8 @@ export function SpatialTree({
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
     if (!needle || !root || !store) return root
-    return filterNode(root, store, needle)
-  }, [query, root, store])
+    return filterNode(root, store, needle, labelCache)
+  }, [query, root, store, labelCache])
 
   return (
     <aside className={cn('flex h-full min-h-0 w-full flex-col bg-card', !embedded && 'border-border lg:w-64 lg:border-r')}>
@@ -108,6 +110,7 @@ export function SpatialTree({
               node={filtered}
               depth={0}
               store={store}
+              labelCache={labelCache}
               expanded={query.trim() ? 'all' : expanded}
               selectedIds={selectedIds}
               isolatedIds={isolatedIds}
@@ -129,10 +132,24 @@ export function SpatialTree({
   )
 }
 
+function cachedElementLabel(
+  cache: Map<number, string>,
+  store: IfcDataStore | null,
+  expressId: number,
+  typeName?: string,
+): string {
+  const hit = cache.get(expressId)
+  if (hit) return hit
+  const label = elementTreeLabel(store, expressId, typeName)
+  cache.set(expressId, label)
+  return label
+}
+
 function TreeNode({
   node,
   depth,
   store,
+  labelCache,
   expanded,
   selectedIds,
   isolatedIds,
@@ -143,6 +160,7 @@ function TreeNode({
   node: SpatialTreeNode
   depth: number
   store: IfcDataStore | null
+  labelCache: Map<number, string>
   expanded: Set<string> | 'all'
   selectedIds: Set<number>
   isolatedIds: Set<number> | null
@@ -202,6 +220,7 @@ function TreeNode({
               node={child}
               depth={depth + 1}
               store={store}
+              labelCache={labelCache}
               expanded={expanded}
               selectedIds={selectedIds}
               isolatedIds={isolatedIds}
@@ -217,6 +236,7 @@ function TreeNode({
               group={group}
               depth={depth + 1}
               store={store}
+              labelCache={labelCache}
               expanded={expanded}
               selectedIds={selectedIds}
               isolatedIds={isolatedIds}
@@ -236,6 +256,7 @@ function TypeGroup({
   group,
   depth,
   store,
+  labelCache,
   expanded,
   selectedIds,
   isolatedIds,
@@ -247,6 +268,7 @@ function TypeGroup({
   group: { typeName: string; ids: number[] }
   depth: number
   store: IfcDataStore | null
+  labelCache: Map<number, string>
   expanded: Set<string> | 'all'
   selectedIds: Set<number>
   isolatedIds: Set<number> | null
@@ -275,27 +297,17 @@ function TypeGroup({
         <span className="font-mono text-[10px]">{formatCount(group.ids.length)}</span>
       </button>
       {open &&
-        visibleIds.map((id) => {
-          const label = store?.entities.getName(id) || `#${id}`
-          return (
-            <button
-              key={id}
-              type="button"
-              id={`tree-${id}`}
-              style={{ paddingLeft: 8 + (depth + 1) * 14 }}
-              className={cn(
-                'flex w-full items-center gap-1.5 rounded-[3px] py-[3px] pr-2 text-left text-[13px] hover:bg-accent',
-                selectedIds.has(id) && 'bg-primary/20 text-foreground',
-                isolatedIds != null && !isolatedIds.has(id) && 'opacity-35',
-              )}
-              onClick={(event) => onSelect(id, isAdditiveModifier(event))}
-            >
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary/70" />
-              <span className="min-w-0 flex-1 truncate">{label}</span>
-              <span className="font-mono text-[10px] text-muted-foreground">#{id}</span>
-            </button>
-          )
-        })}
+        visibleIds.map((id) => (
+          <TreeElementRow
+            key={id}
+            id={id}
+            label={cachedElementLabel(labelCache, store, id, group.typeName)}
+            depth={depth + 1}
+            selected={selectedIds.has(id)}
+            dimmed={isolatedIds != null && !isolatedIds.has(id)}
+            onSelect={onSelect}
+          />
+        ))}
       {open && group.ids.length > 250 ? (
         <p
           style={{ paddingLeft: 8 + (depth + 1) * 14 }}
@@ -308,21 +320,60 @@ function TypeGroup({
   )
 }
 
+const TreeElementRow = memo(function TreeElementRow({
+  id,
+  label,
+  depth,
+  selected,
+  dimmed,
+  onSelect,
+}: {
+  id: number
+  label: string
+  depth: number
+  selected: boolean
+  dimmed: boolean
+  onSelect: (id: number, additive?: boolean) => void
+}) {
+  return (
+    <button
+      type="button"
+      id={`tree-${id}`}
+      style={{ paddingLeft: 8 + depth * 14 }}
+      className={cn(
+        'flex w-full items-center gap-1.5 rounded-[3px] py-[3px] pr-2 text-left text-[13px] hover:bg-accent',
+        selected && 'bg-primary/20 text-foreground',
+        dimmed && 'opacity-35',
+      )}
+      onClick={(event) => onSelect(id, isAdditiveModifier(event))}
+    >
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary/70" />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="font-mono text-[10px] text-muted-foreground">#{id}</span>
+    </button>
+  )
+})
+
 function collectAutoExpand(node: SpatialTreeNode, depth: number, into: Set<string>) {
   if (depth < 2) into.add(`n:${node.expressId}`)
   for (const child of node.children) collectAutoExpand(child, depth + 1, into)
 }
 
-function filterNode(node: SpatialTreeNode, store: IfcDataStore, needle: string): SpatialTreeNode | null {
+function filterNode(
+  node: SpatialTreeNode,
+  store: IfcDataStore,
+  needle: string,
+  cache: Map<number, string>,
+): SpatialTreeNode | null {
   const selfMatch = matches(node.name, needle) || matches(node.longName, needle) || String(node.expressId).includes(needle)
   const children = node.children
-    .map((child) => filterNode(child, store, needle))
+    .map((child) => filterNode(child, store, needle, cache))
     .filter((child): child is SpatialTreeNode => child != null)
   const elementGroups = node.elementGroups
     .map((group) => ({
       typeName: group.typeName,
       ids: group.ids.filter((id) => {
-        const name = store.entities.getName(id)
+        const name = cachedElementLabel(cache, store, id, group.typeName)
         return matches(name, needle) || matches(group.typeName, needle) || String(id).includes(needle)
       }),
     }))

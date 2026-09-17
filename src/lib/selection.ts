@@ -31,3 +31,16 @@ export function applyClickSelection(
   return new Set([id])
 }
 
+/** Ids whose selected bit flipped — used to patch GPU looks without walking the model. */
+export function touchedSelectionIds(previous: Set<number>, next: Set<number>): number[] {
+  if (previous === next) return []
+  const out: number[] = []
+  for (const id of previous) {
+    if (!next.has(id)) out.push(id)
+  }
+  for (const id of next) {
+    if (!previous.has(id)) out.push(id)
+  }
+  return out
+}
+

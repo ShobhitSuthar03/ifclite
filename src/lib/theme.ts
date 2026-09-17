@@ -3,8 +3,8 @@ export type Theme = 'dark' | 'light'
 export const THEME_STORAGE_KEY = 'ifclite.theme'
 
 export const VIEWPORT_THEME = {
-  dark: { clear: 0x18181c, gridMajor: 0x3f3f4e, gridMinor: 0x2b2b36 },
-  light: { clear: 0xf7f7fa, gridMajor: 0xc5c7d0, gridMinor: 0xe4e6ec },
+  dark: { clear: 0x18181c },
+  light: { clear: 0xf7f7fa },
 } as const
 
 export function isTheme(value: string | null): value is Theme {
