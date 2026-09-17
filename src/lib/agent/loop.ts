@@ -43,6 +43,7 @@ async function dispatchTool(
   rawArgs: string,
   runtime: EstimatorRuntime,
   syncPort: number | null,
+  mcpToken: string | null,
 ): Promise<string> {
   let args: Record<string, unknown> = {}
   try {
@@ -54,8 +55,8 @@ async function dispatchTool(
     const result: ToolResult = await runEstimatorTool(name, args, runtime)
     return result.data ? `${result.text}\n${JSON.stringify(result.data, null, 2)}` : result.text
   }
-  if (!syncPort) return `${name} needs the MCP sidecar (BIM tools).`
-  return callSidecarBim(syncPort, name, args)
+  if (!syncPort || !mcpToken) return `${name} needs the MCP sidecar (BIM tools).`
+  return callSidecarBim(syncPort, mcpToken, name, args)
 }
 
 export async function runEstimatorChatTurn(args: {
@@ -65,12 +66,13 @@ export async function runEstimatorChatTurn(args: {
   user: string
   runtime: EstimatorRuntime
   syncPort: number | null
+  mcpToken: string | null
   onStatus?: (text: string) => void
 }): Promise<string> {
   if (!args.settings.apiKey.trim()) {
     throw new Error('Add an API key in Estimator settings.')
   }
-  if (args.syncPort == null) {
+  if (args.syncPort == null || !args.mcpToken) {
     throw new Error(
       'The Estimator sidecar is not running, so chat cannot call the LLM. Open a project and wait until the status bar says MCP ready. The agent can take off quantities, classify assemblies, and build a BOQ once that is live.',
     )
@@ -85,7 +87,7 @@ export async function runEstimatorChatTurn(args: {
   const tools = openaiTools()
   for (let round = 0; round < 8; round += 1) {
     args.onStatus?.(round === 0 ? 'Thinking…' : `Tool round ${round}…`)
-    const json = await callSidecarLlm(args.syncPort, {
+    const json = await callSidecarLlm(args.syncPort, args.mcpToken, {
       provider: args.settings.provider,
       baseUrl: args.settings.baseUrl,
       apiKey: args.settings.apiKey,
@@ -107,7 +109,13 @@ export async function runEstimatorChatTurn(args: {
     })
     for (const call of calls) {
       args.onStatus?.(`Calling ${call.function.name}…`)
-      const output = await dispatchTool(call.function.name, call.function.arguments, args.runtime, args.syncPort)
+      const output = await dispatchTool(
+        call.function.name,
+        call.function.arguments,
+        args.runtime,
+        args.syncPort,
+        args.mcpToken,
+      )
       messages.push({
         role: 'tool',
         tool_call_id: call.id,

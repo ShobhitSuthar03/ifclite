@@ -129,7 +129,7 @@ export function EstimationPanel({
   const applyBind = (next: BoqDoc) => {
     if (!onBind) {
       changeSheet(() => next)
-      return { mappedLines: 0, mappedElements: 0 }
+      return { boq: next, mappedLines: 0, mappedElements: 0 }
     }
     const bound = onBind(next)
     changeSheet(() => bound.boq)
@@ -202,7 +202,7 @@ export function EstimationPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border px-2">
+      <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border bg-muted/40 px-2">
         <div className="flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto">
           {doc.boqs.map((boq) => {
             const selectedSheet = boq.id === sheet.id
@@ -737,16 +737,6 @@ function lineAmount(node: BoqNode, byId: Map<string, CostAssembly>, quantities: 
 function countLeaves(nodes: BoqNode[]): number {
   let count = 0
   const walk = (node: BoqNode) => {
-    if (node.children.length === 0) count += 1
-    for (const child of node.children) walk(child)
-  }
-  for (const node of nodes) walk(node)
-  return count
-}
-
-function previewCount(nodes: PropertyTreeNode[]): number {
-  let count = 0
-  const walk = (node: PropertyTreeNode) => {
     if (node.children.length === 0) count += 1
     for (const child of node.children) walk(child)
   }

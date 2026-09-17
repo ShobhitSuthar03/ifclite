@@ -185,7 +185,7 @@ import { isDesktopShell } from '@/lib/host'
 import { elementTreeLabel } from '@/lib/element-label'
 import { EstimatorAgentPanel } from '@/components/estimator-agent-panel'
 import { searchModelElements } from '@/lib/estimator-tools/model-search'
-import type { PropertySearchInput, ViewerAction } from '@/lib/estimator-tools'
+import { summarizeModelForAgent, type PropertySearchInput, type ViewerAction } from '@/lib/estimator-tools'
 import {
   getEstimatorSync,
   joinProjectFile,
@@ -1633,7 +1633,7 @@ export default function App() {
           ready: false,
           error: null,
         })
-        const health = await waitForMcpReady(started.syncPort)
+        const health = await waitForMcpReady(started.syncPort, started.token)
         if (cancelled) return
         setMcp((current) =>
           current
@@ -1735,7 +1735,6 @@ export default function App() {
   const groupingUiOpen =
     leftTab === 'filters' || leftTab === 'views' || mobileTab === 'filters' || mobileTab === 'views'
   const estimationUiOpen = scheduleOpen && bottomTab === 'estimation'
-  const propertiesUiOpen = groupingUiOpen || estimationUiOpen
   const filterUiOpen = groupingUiOpen || filterColorize
 
   const filterTree = useMemo(() => {
@@ -1871,6 +1870,11 @@ export default function App() {
     mutationPatches,
   ])
 
+  const agentModelOverview = useMemo(
+    () => summarizeModelForAgent(result?.fileName ?? null, spatialRoot),
+    [result?.fileName, spatialRoot],
+  )
+
   const estimationPreviewTree = useMemo(() => {
     if (!estimationUiOpen || estimationGroupBy.length === 0) return []
     if (warehouse) return buildWarehousePropertyTree(warehouse, estimationGroupBy, spec)
@@ -1957,7 +1961,7 @@ export default function App() {
     if (applyingAgentSync.current) return
     const timer = window.setTimeout(() => {
       mcpRevision.current += 1
-      void postEstimatorSync(mcp.syncPort, {
+      void postEstimatorSync(mcp.syncPort, mcp.token, {
         revision: mcpRevision.current,
         estimation,
         selectedIds: [...selectedIds],
@@ -2008,7 +2012,7 @@ export default function App() {
   useEffect(() => {
     if (!mcp?.ready) return
     const timer = window.setInterval(() => {
-      void getEstimatorSync(mcp.syncPort)
+      void getEstimatorSync(mcp.syncPort, mcp.token)
         .then((snap) => {
           if (snap.pendingTakeoffIds?.length && !quantityBusyRef.current) {
             runTakeoffRef.current(snap.pendingTakeoffIds, `mcp-qto:${snap.pendingTakeoffIds.join(',')}`)
@@ -2016,7 +2020,7 @@ export default function App() {
           if (snap.pendingViewer?.length && !viewerBusyRef.current) {
             viewerBusyRef.current = true
             for (const action of snap.pendingViewer) applyAgentViewerRef.current(action)
-            void postEstimatorSync(mcp.syncPort, {
+            void postEstimatorSync(mcp.syncPort, mcp.token, {
               revision: mcpRevision.current,
               consumedViewer: snap.pendingViewer.length,
             })
@@ -2028,7 +2032,7 @@ export default function App() {
           if (snap.pendingSearch && !searchBusyRef.current) {
             searchBusyRef.current = true
             const result = searchElementsRef.current(snap.pendingSearch)
-            void postEstimatorSync(mcp.syncPort, {
+            void postEstimatorSync(mcp.syncPort, mcp.token, {
               revision: mcpRevision.current,
               searchResults: result,
             })
@@ -2049,7 +2053,7 @@ export default function App() {
             }
             return next
           })
-          void postEstimatorSync(mcp.syncPort, {
+          void postEstimatorSync(mcp.syncPort, mcp.token, {
             revision: snap.revision,
             force: true,
             estimation: snap.estimation,
@@ -3031,7 +3035,9 @@ export default function App() {
                 <EstimatorAgentPanel
                   mcpReady={Boolean(mcp?.ready)}
                   mcpUrl={mcp?.url ?? null}
+                  mcpToken={mcp?.ready ? mcp.token : null}
                   syncPort={mcp?.ready ? mcp.syncPort : null}
+                  modelOverview={agentModelOverview}
                   catalog={assemblyCatalog}
                   catalogPath={assemblyPath}
                   estimation={estimation}

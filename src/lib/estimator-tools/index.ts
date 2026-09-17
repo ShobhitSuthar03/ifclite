@@ -1,4 +1,5 @@
 export { ESTIMATE_5D_PROMPT, ESTIMATE_5D_PROMPT_DESCRIPTION, ESTIMATE_5D_PROMPT_NAME, ESTIMATE_5D_TOOL_NOTES } from '@/lib/estimator-tools/prompt'
+export { summarizeModelForAgent } from '@/lib/estimator-tools/model-context'
 export {
   BIM_PROXY_TOOL_DEFINITIONS,
   ESTIMATOR_TOOL_DEFINITIONS,

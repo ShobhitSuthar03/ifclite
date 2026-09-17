@@ -8,6 +8,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { timingSafeEqual } from 'node:crypto'
 import {
   BearerTokenAuth,
   buildDefaultPromptRegistry,
@@ -37,12 +38,39 @@ import {
 } from '../src/lib/estimator-tools/index.ts'
 import type { QuantityResult } from '../src/lib/geometry-qto/types.ts'
 
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type,Authorization,Mcp-Session-Id',
-  'Cross-Origin-Resource-Policy': 'cross-origin',
-  'Cache-Control': 'no-store',
+// Only the app's own webview ever has a legitimate reason to call this server -
+// http://127.0.0.1:43127 is the vite dev server it loads from in `tauri dev`;
+// tauri://localhost / http://tauri.localhost are the packaged webview origin
+// on different platforms. Anything else gets no Access-Control-Allow-Origin at
+// all, so a browser refuses to let the calling page read the response even if
+// it somehow had a valid token.
+const ALLOWED_ORIGINS = new Set(['http://127.0.0.1:43127', 'tauri://localhost', 'http://tauri.localhost'])
+
+function corsHeaders(req: IncomingMessage): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization,Mcp-Session-Id',
+    'Cross-Origin-Resource-Policy': 'same-site',
+    'Cache-Control': 'no-store',
+    Vary: 'Origin',
+  }
+  const origin = req.headers.origin
+  if (origin && ALLOWED_ORIGINS.has(origin)) headers['Access-Control-Allow-Origin'] = origin
+  return headers
+}
+
+/** Constant-time bearer-token check - every route on this server requires it (see
+ * main()'s request handler); a malicious page or unrelated local process cannot
+ * mutate the model, execute tools, or use the /llm relay without it. */
+function isAuthorized(req: IncomingMessage, token: string): boolean {
+  const header = req.headers.authorization
+  if (typeof header !== 'string') return false
+  const match = /^Bearer\s+(.+)$/i.exec(header)
+  if (!match) return false
+  const provided = Buffer.from(match[1])
+  const expected = Buffer.from(token)
+  if (provided.length !== expected.length) return false
+  return timingSafeEqual(provided, expected)
 }
 
 function flag(name: string): string | undefined {
@@ -198,9 +226,9 @@ async function readBody(req: IncomingMessage, maxBytes = 64 * 1024 * 1024): Prom
   return Buffer.concat(chunks).toString('utf8')
 }
 
-function send(res: ServerResponse, status: number, body: unknown) {
+function send(req: IncomingMessage, res: ServerResponse, status: number, body: unknown) {
   const json = JSON.stringify(body)
-  res.writeHead(status, { ...CORS, 'Content-Type': 'application/json; charset=utf-8' })
+  res.writeHead(status, { ...corsHeaders(req), 'Content-Type': 'application/json; charset=utf-8' })
   res.end(json)
 }
 
@@ -359,14 +387,18 @@ async function main() {
 
   const sync = createServer(async (req, res) => {
     if (req.method === 'OPTIONS') {
-      res.writeHead(204, CORS)
+      res.writeHead(204, corsHeaders(req))
       res.end()
+      return
+    }
+    if (!isAuthorized(req, token)) {
+      send(req, res, 401, { error: 'unauthorized' })
       return
     }
     const url = new URL(req.url || '/', `http://${host}:${syncPort}`)
     try {
       if (req.method === 'GET' && url.pathname === '/health') {
-        send(res, 200, {
+        send(req, res, 200, {
           ok: true,
           ready,
           loading,
@@ -377,7 +409,7 @@ async function main() {
         return
       }
       if (req.method === 'GET' && url.pathname === '/sync') {
-        send(res, 200, runtime.snapshot())
+        send(req, res, 200, runtime.snapshot())
         return
       }
       if (req.method === 'POST' && url.pathname === '/sync') {
@@ -389,27 +421,27 @@ async function main() {
             log(`catalog reload failed: ${caught instanceof Error ? caught.message : String(caught)}`)
           }
         }
-        send(res, 200, runtime.applyFromApp(payload))
+        send(req, res, 200, runtime.applyFromApp(payload))
         return
       }
       if (req.method === 'POST' && url.pathname === '/tools') {
         const payload = JSON.parse(await readBody(req)) as { name?: string; arguments?: Record<string, unknown> }
         if (!payload.name) {
-          send(res, 400, { ok: false, text: 'name is required' })
+          send(req, res, 400, { ok: false, text: 'name is required' })
           return
         }
         const result = await runEstimatorTool(payload.name, payload.arguments ?? {}, runtime)
-        send(res, result.ok ? 200 : 400, result)
+        send(req, res, result.ok ? 200 : 400, result)
         return
       }
       if (req.method === 'POST' && url.pathname === '/bim') {
         if (!bimServer || !bimReady) {
-          send(res, 503, { ok: false, text: 'BIM tools are not ready yet.' })
+          send(req, res, 503, { ok: false, text: 'BIM tools are not ready yet.' })
           return
         }
         const payload = JSON.parse(await readBody(req)) as { name?: string; arguments?: Record<string, unknown> }
         if (!payload.name) {
-          send(res, 400, { ok: false, text: 'name is required' })
+          send(req, res, 400, { ok: false, text: 'name is required' })
           return
         }
         const response = await bimServer.handleMessage({
@@ -418,18 +450,18 @@ async function main() {
           method: 'tools/call',
           params: { name: payload.name, arguments: payload.arguments ?? {} },
         })
-        send(res, 200, response)
+        send(req, res, 200, response)
         return
       }
       if (req.method === 'POST' && url.pathname === '/llm') {
         const payload = JSON.parse(await readBody(req, 8 * 1024 * 1024)) as Parameters<typeof chatCompletions>[0]
         const result = await chatCompletions(payload)
-        send(res, 200, result)
+        send(req, res, 200, result)
         return
       }
-      send(res, 404, { error: 'not found' })
+      send(req, res, 404, { error: 'not found' })
     } catch (caught) {
-      send(res, 500, { error: { message: caught instanceof Error ? caught.message : String(caught) } })
+      send(req, res, 500, { error: { message: caught instanceof Error ? caught.message : String(caught) } })
     }
   })
 

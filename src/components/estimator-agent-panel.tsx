@@ -22,7 +22,9 @@ import type { PropertyTreeNode } from '@/lib/property-tree'
 type EstimatorAgentPanelProps = {
   mcpReady: boolean
   mcpUrl: string | null
+  mcpToken: string | null
   syncPort: number | null
+  modelOverview: string
   catalog: CostAssemblyCatalog | null
   catalogPath: string
   estimation: EstimationDoc
@@ -62,7 +64,9 @@ function titleFrom(messages: ChatMessage[]) {
 export function EstimatorAgentPanel({
   mcpReady,
   mcpUrl,
+  mcpToken,
   syncPort,
+  modelOverview,
   catalog,
   catalogPath,
   estimation,
@@ -100,6 +104,9 @@ export function EstimatorAgentPanel({
     const context = [
       ESTIMATE_5D_PROMPT,
       '',
+      '## Model overview',
+      modelOverview,
+      '',
       '## Live desktop context',
       `Cost Assembly Store: ${catalog ? `${catalog.catalogName} (${catalog.assemblies.length} assemblies) at ${catalogPath}` : 'not loaded'}`,
       `Selection: ${selectionLabel}`,
@@ -112,7 +119,7 @@ export function EstimatorAgentPanel({
       'Use property_search to find elements (type, name, storey, properties), then desktop_isolate / desktop_select so the user can see them. desktop_show_all restores the model. Use query_entities / geometry_volume / geometry_area for extra BIM queries. Do not call MCP viewer_* tools.',
     ]
     return context.join('\n')
-  }, [catalog, catalogPath, estimation, mcpUrl, quantities, selectedIds, selectionLabel])
+  }, [catalog, catalogPath, estimation, mcpUrl, modelOverview, quantities, selectedIds, selectionLabel])
 
   const patchThread = (id: string, patch: Partial<ChatThread> | ((current: ChatThread) => ChatThread)) => {
     setThreads((current) =>
@@ -181,6 +188,7 @@ export function EstimatorAgentPanel({
         user: text,
         runtime,
         syncPort,
+        mcpToken,
         onStatus: (next) => {
           if (turn === turnRef.current) setStatus(next)
         },

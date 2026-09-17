@@ -1,12 +1,12 @@
 use hex::encode;
 use parking_lot::Mutex;
+use rand::RngCore;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -54,15 +54,15 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
+/// A per-session bearer token gating the sidecar's HTTP surface (both the MCP
+/// protocol port and the app's own sync port - see mcp-host.ts). Drawn from the
+/// OS CSPRNG rather than derived from process start time + pid, which - despite
+/// the SHA-256 wrapper - has too little real entropy for a local attacker who
+/// can observe roughly when the sidecar process started.
 fn make_token() -> String {
-    let mut hasher = Sha256::new();
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    hasher.update(now.to_le_bytes());
-    hasher.update(std::process::id().to_le_bytes());
-    encode(&hasher.finalize()[..16])
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    encode(bytes)
 }
 
 fn push_opt(cmd: &mut Command, flag: &str, value: &Option<String>) {
@@ -152,10 +152,74 @@ fn pids_listening_on(port: u16) -> BTreeSet<u32> {
     pids
 }
 
-fn free_port(port: u16) {
+/// Best-effort read of a process's command line, used only to avoid killing an
+/// unrelated process that happens to be listening on our port (see `free_port`).
+/// `None` (can't determine) is treated as "don't kill" by every caller.
+fn process_command_line(pid: u32) -> Option<String> {
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("wmic");
+        cmd.args([
+            "process",
+            "where",
+            &format!("ProcessId={pid}"),
+            "get",
+            "CommandLine",
+            "/VALUE",
+        ]);
+        hide_window(&mut cmd);
+        let output = cmd.output().ok()?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        text.lines()
+            .find_map(|line| line.strip_prefix("CommandLine="))
+            .map(|value| value.trim().to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        let output = Command::new("ps").args(["-p", &pid.to_string(), "-o", "command="]).output().ok()?;
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if text.is_empty() {
+            None
+        } else {
+            Some(text)
+        }
+    }
+}
+
+/// Only a prior `ifclite` MCP sidecar of our own (a `node`/`tsx` process running
+/// `mcp-host.ts`) is a safe thing to kill on a port conflict - anything else
+/// listening there is some unrelated program the port collision should be
+/// reported as an error, not silently evicted.
+fn is_our_sidecar_process(pid: u32) -> bool {
+    process_command_line(pid)
+        .map(|line| {
+            let lower = line.to_ascii_lowercase();
+            lower.contains("mcp-host.ts") || lower.contains("mcp-host.mjs")
+        })
+        .unwrap_or(false)
+}
+
+fn free_port(port: u16) -> Result<(), String> {
+    let mut blocked_by_other = Vec::new();
     for pid in pids_listening_on(port) {
-        eprintln!("[mcp-host] freeing port {port} (pid {pid})");
-        kill_process_tree(pid);
+        if is_our_sidecar_process(pid) {
+            eprintln!("[mcp-host] freeing port {port} (pid {pid}, prior ifclite-mcp instance)");
+            kill_process_tree(pid);
+        } else {
+            blocked_by_other.push(pid);
+        }
+    }
+    if blocked_by_other.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "port {port} is in use by another program (pid {}), not a prior IFClite MCP sidecar - refusing to stop it",
+            blocked_by_other
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
     }
 }
 
@@ -183,8 +247,8 @@ pub fn start_mcp_host(
     let tsconfig = root.join("tsconfig.mcp.json");
     let port = port.unwrap_or(8765);
     let sync_port = port.saturating_add(1);
-    free_port(port);
-    free_port(sync_port);
+    free_port(port)?;
+    free_port(sync_port)?;
     thread::sleep(Duration::from_millis(250));
     let token = make_token();
 

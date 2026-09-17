@@ -23,10 +23,14 @@ export type McpHealth = {
   revision: number
 }
 
-const HEADERS = { 'Content-Type': 'application/json' }
-
 export function syncBase(syncPort: number): string {
   return `http://127.0.0.1:${syncPort}`
+}
+
+/** Every sync-server route requires this (see mcp-host.ts's isAuthorized) - without
+ * it, any other local process or web page that reaches this port gets a 401. */
+function authHeaders(token: string): Record<string, string> {
+  return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
 }
 
 export async function startMcpHost(args: {
@@ -51,18 +55,18 @@ export async function stopMcpHost(): Promise<void> {
   await invoke('stop_mcp_host')
 }
 
-export async function fetchMcpHealth(syncPort: number): Promise<McpHealth> {
-  const response = await fetch(`${syncBase(syncPort)}/health`)
+export async function fetchMcpHealth(syncPort: number, token: string): Promise<McpHealth> {
+  const response = await fetch(`${syncBase(syncPort)}/health`, { headers: authHeaders(token) })
   if (!response.ok) throw new Error(`MCP health ${response.status}`)
   return (await response.json()) as McpHealth
 }
 
-export async function waitForMcpReady(syncPort: number, timeoutMs = 90_000): Promise<McpHealth> {
+export async function waitForMcpReady(syncPort: number, token: string, timeoutMs = 90_000): Promise<McpHealth> {
   const started = Date.now()
   let last: Error | null = null
   while (Date.now() - started < timeoutMs) {
     try {
-      const health = await fetchMcpHealth(syncPort)
+      const health = await fetchMcpHealth(syncPort, token)
       if (health.ready) return health
       if (health.error) throw new Error(health.error)
     } catch (caught) {
@@ -75,6 +79,7 @@ export async function waitForMcpReady(syncPort: number, timeoutMs = 90_000): Pro
 
 export async function postEstimatorSync(
   syncPort: number,
+  token: string,
   payload: {
     revision: number
     force?: boolean
@@ -91,7 +96,7 @@ export async function postEstimatorSync(
 ): Promise<{ accepted: boolean; snapshot: EstimatorSyncSnapshot }> {
   const response = await fetch(`${syncBase(syncPort)}/sync`, {
     method: 'POST',
-    headers: HEADERS,
+    headers: authHeaders(token),
     body: JSON.stringify({
       ...payload,
       quantities: payload.quantities !== undefined ? persistableQuantities(payload.quantities) : undefined,
@@ -101,20 +106,21 @@ export async function postEstimatorSync(
   return (await response.json()) as { accepted: boolean; snapshot: EstimatorSyncSnapshot }
 }
 
-export async function getEstimatorSync(syncPort: number): Promise<EstimatorSyncSnapshot> {
-  const response = await fetch(`${syncBase(syncPort)}/sync`)
+export async function getEstimatorSync(syncPort: number, token: string): Promise<EstimatorSyncSnapshot> {
+  const response = await fetch(`${syncBase(syncPort)}/sync`, { headers: authHeaders(token) })
   if (!response.ok) throw new Error(`MCP sync GET ${response.status}`)
   return (await response.json()) as EstimatorSyncSnapshot
 }
 
 export async function callSidecarTool(
   syncPort: number,
+  token: string,
   name: string,
   args: Record<string, unknown>,
 ): Promise<ToolResult> {
   const response = await fetch(`${syncBase(syncPort)}/tools`, {
     method: 'POST',
-    headers: HEADERS,
+    headers: authHeaders(token),
     body: JSON.stringify({ name, arguments: args }),
   })
   return (await response.json()) as ToolResult
@@ -122,12 +128,13 @@ export async function callSidecarTool(
 
 export async function callSidecarBim(
   syncPort: number,
+  token: string,
   name: string,
   args: Record<string, unknown>,
 ): Promise<string> {
   const response = await fetch(`${syncBase(syncPort)}/bim`, {
     method: 'POST',
-    headers: HEADERS,
+    headers: authHeaders(token),
     body: JSON.stringify({ name, arguments: args }),
   })
   const json = (await response.json()) as {
@@ -141,6 +148,7 @@ export async function callSidecarBim(
 
 export async function callSidecarLlm(
   syncPort: number,
+  token: string,
   body: Record<string, unknown>,
 ): Promise<{
   choices?: Array<{
@@ -156,7 +164,7 @@ export async function callSidecarLlm(
   try {
     response = await fetch(`${syncBase(syncPort)}/llm`, {
       method: 'POST',
-      headers: HEADERS,
+      headers: authHeaders(token),
       body: JSON.stringify(body),
     })
   } catch (caught) {

@@ -3,7 +3,7 @@ import { ChevronDown, ChevronUp } from 'lucide-react'
 import { formatAssemblyMoney, formatAssemblyQty, formatAssemblyUnit } from '@/lib/cost-assembly/search'
 import type { CostAssembly, CostKind } from '@/lib/cost-assembly/types'
 import type { BoqNode } from '@/lib/estimation'
-import type { ElementBuildUp, ElementBuildUpLine } from '@/lib/estimation/qty-bind'
+import type { ElementBuildUp } from '@/lib/estimation/qty-bind'
 import { cn } from '@/lib/utils'
 
 type SectionId = 'LO' | 'MA' | 'ME' | 'OT'
