@@ -17,9 +17,11 @@
         "title": "IFClite Desktop",
         "width": 1440,
         "height": 900,
-        "minWidth": 880,
-        "minHeight": 560,
-        "dragDropEnabled": true
+        "minWidth": 1060,
+        "minHeight": 640,
+        "dragDropEnabled": true,
+        "center": true,
+        "maximized": true
       }
     ],
     "security": {

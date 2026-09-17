@@ -188,7 +188,7 @@ export function LeftDock({
           />
         ) : tab === 'views' ? (
           <div className="flex h-full min-h-0 flex-col">
-            <div className="min-h-0 flex-[5] overflow-hidden">
+            <div className="min-h-0 flex-[7] overflow-hidden">
               <FilterBar
                 ready={filterReady}
                 hint={filterHint}
@@ -210,7 +210,7 @@ export function LeftDock({
                 multiSelect
               />
             </div>
-            <div className="min-h-0 flex-[4] overflow-hidden border-t border-border">
+            <div className="min-h-0 flex-[3] overflow-hidden border-t-2 border-border bg-muted/10">
               <ViewsPanel
                 views={savedViews}
                 selectedCount={selectedIds.size}

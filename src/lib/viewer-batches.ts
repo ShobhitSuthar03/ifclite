@@ -257,9 +257,12 @@ function createBatchMaterial(): THREE.MeshLambertMaterial {
       .replace(
         '#include <opaque_fragment>',
         `if (vElementState > 1.5 && vElementState < 2.5) {
-           outgoingLight = mix(outgoingLight, vec3(0.88), 0.88);
+           float ghostDx = mod(gl_FragCoord.x, 4.0);
+           float ghostDy = mod(gl_FragCoord.y, 4.0);
+           if (!(ghostDx < 1.0 && ghostDy < 1.0)) discard;
+           outgoingLight = mix(outgoingLight, vec3(0.7), 0.5);
          } else if (vElementState > 2.5 && vElementState < 3.5) {
-           outgoingLight = mix(outgoingLight, vec3(1.0, 0.84, 0.08), 0.72);
+           outgoingLight = mix(outgoingLight, vec3(1.0, 0.32, 0.02), 0.88);
          } else if (vElementState > 3.5) {
            outgoingLight = mix(outgoingLight, vec3(1.0, 0.92, 0.35), 0.4);
          }

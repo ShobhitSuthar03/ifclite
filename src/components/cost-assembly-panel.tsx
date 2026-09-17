@@ -66,7 +66,7 @@ export function CostAssemblyPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-2">
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border bg-muted/40 px-2">
         <p className="shrink-0 text-[12px] font-medium">Assemblies</p>
         {catalog ? (
           <span className="font-mono text-[10px] text-muted-foreground">{formatCount(catalog.assemblies.length)}</span>

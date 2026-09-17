@@ -73,11 +73,15 @@ export function FilterBar({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="space-y-2 border-b border-border p-3">
-        <p className="text-[11px] text-muted-foreground">
-          {intro ??
-            'Pick properties to build a breakdown. Click a used property or use the arrows to change order — the value list follows Group, then Then.'}
-        </p>
-        {hint ? <p className="text-[11px] text-muted-foreground">{hint}</p> : null}
+        {rules.length === 0 ? (
+          <>
+            <p className="text-[11px] text-muted-foreground">
+              {intro ??
+                'Pick properties to build a breakdown. Click a used property or use the arrows to change order — the value list follows Group, then Then.'}
+            </p>
+            {hint ? <p className="text-[11px] text-muted-foreground">{hint}</p> : null}
+          </>
+        ) : null}
         <div className="grid grid-cols-2 gap-1.5">
           <select
             className={fieldClass}
@@ -125,7 +129,7 @@ export function FilterBar({
       </div>
       <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,2fr)_minmax(0,3fr)]">
         <div className="flex min-h-0 flex-col border-b border-border">
-          <div className="flex h-8 shrink-0 items-center border-b border-border px-3">
+          <div className="flex h-8 shrink-0 items-center border-b border-border bg-muted/40 px-3">
             <span className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">Properties</span>
           </div>
           <ScrollArea className="min-h-0 flex-1">

@@ -60,7 +60,7 @@ export function DashboardPanel({
   )
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-start gap-2 border-b border-border p-3">
+      <div className="flex items-start gap-2 border-b border-border bg-muted/40 p-3">
         <LayoutDashboard className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-semibold">{result.title}</p>

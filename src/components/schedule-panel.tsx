@@ -395,7 +395,7 @@ function SchedulePanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-2">
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border bg-muted/40 px-2">
         <p className="min-w-0 truncate text-[12px] font-medium">
           {loading ? 'Reading IfcTask / IfcWorkSchedule...' : model?.name || 'Schedule'}
         </p>
