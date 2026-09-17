@@ -56,6 +56,8 @@ import {
   type QuerySpec,
 } from '@/lib/ifc-query'
 import { useEstimationPanes, usePanelWidths } from '@/lib/panel-layout'
+import { broadcastPaneState, closePaneWindow, onPaneAction, onPaneClosed, openPaneWindow } from '@/lib/pane-sync'
+import type { BuildUpPaneAction, BuildUpPaneState } from '@/pane-app'
 import { cn } from '@/lib/utils'
 import { applyClickSelection, setsEqual } from '@/lib/selection'
 import {
@@ -181,6 +183,8 @@ import {
   type QtyBinding,
 } from '@/lib/estimation'
 import { buildUpRows } from '@/lib/cost-assembly/build-up'
+import { setParameterOverride } from '@/lib/cost-assembly/params'
+import { setParamBinding, type ParamBinding } from '@/lib/estimation/param-bind'
 import { isDesktopShell } from '@/lib/host'
 import { elementTreeLabel } from '@/lib/element-label'
 import { EstimatorAgentPanel } from '@/components/estimator-agent-panel'
@@ -351,6 +355,7 @@ export default function App() {
   const [selectedBoqId, setSelectedBoqId] = useState<string | null>(null)
   const [estimationStoreTree, setEstimationStoreTree] = useState<PropertyTreeNode[]>([])
   const [buildUpHeight, setBuildUpHeight] = useState(280)
+  const [buildupPopped, setBuildupPopped] = useState(false)
   const [estimatorHeight, setEstimatorHeight] = useState(240)
   const [mcp, setMcp] = useState<{
     url: string
@@ -2100,6 +2105,82 @@ export default function App() {
   const onExcludedBuildUpChange = useCallback((excludedLines: Record<string, boolean>) => {
     setEstimation((current) => mapActiveBoq(current, (boq) => ({ ...boq, excludedLines })))
   }, [])
+  const onParameterOverrideChange = useCallback((code: string, value: string) => {
+    if (!selectedBoqAssembly) return
+    setEstimation((current) =>
+      mapActiveBoq(current, (boq) => ({
+        ...boq,
+        parameterOverrides: setParameterOverride(boq.parameterOverrides ?? {}, selectedBoqAssembly.id, code, value),
+      })),
+    )
+  }, [selectedBoqAssembly])
+  const onParamBindingChange = useCallback((code: string, binding: ParamBinding) => {
+    if (!selectedBoqAssembly) return
+    setEstimation((current) =>
+      mapActiveBoq(current, (boq) => ({
+        ...boq,
+        parameterBindings: setParamBinding(boq.parameterBindings ?? {}, selectedBoqAssembly.id, code, binding),
+      })),
+    )
+  }, [selectedBoqAssembly])
+
+  const buildUpEmptyHint = selectedBoq
+    ? 'Assign an assembly on this BOQ line to see labour, material and plant.'
+    : 'Select a BOQ line to see the assembly cost build-up.'
+
+  const onPopOutBuildUp = useCallback(() => {
+    setBuildupPopped(true)
+    void openPaneWindow('buildup')
+  }, [])
+
+  useEffect(() => {
+    let unlistenAction: (() => void) | null = null
+    let unlistenClosed: (() => void) | null = null
+    onPaneAction<BuildUpPaneAction>('buildup', (action) => {
+      if (action.type === 'bind') onBindBuildUpQty(action.rowId, action.binding)
+      else if (action.type === 'excluded') onExcludedBuildUpChange(action.excluded)
+      else if (action.type === 'parameter') onParameterOverrideChange(action.code, action.value)
+      else if (action.type === 'paramBinding') onParamBindingChange(action.code, action.binding)
+    }).then((fn) => {
+      unlistenAction = fn
+    })
+    onPaneClosed('buildup', () => setBuildupPopped(false)).then((fn) => {
+      unlistenClosed = fn
+    })
+    return () => {
+      unlistenAction?.()
+      unlistenClosed?.()
+    }
+  }, [onBindBuildUpQty, onExcludedBuildUpChange, onParameterOverrideChange, onParamBindingChange])
+
+  useEffect(() => {
+    if (!buildupPopped) return
+    const state: BuildUpPaneState = {
+      assembly: selectedBoqAssembly,
+      elementIds: selectedBoq?.ids ?? [],
+      assemblyQty: selectedBoqQty ?? null,
+      quantities,
+      propertyCatalog,
+      bindings: estimationSheet.qtyBindings ?? {},
+      excludedLines: estimationSheet.excludedLines ?? {},
+      parameterOverrides: estimationSheet.parameterOverrides ?? {},
+      parameterBindings: estimationSheet.parameterBindings ?? {},
+      emptyHint: buildUpEmptyHint,
+    }
+    void broadcastPaneState('buildup', state)
+  }, [
+    buildupPopped,
+    selectedBoqAssembly,
+    selectedBoq,
+    selectedBoqQty,
+    quantities,
+    propertyCatalog,
+    estimationSheet.qtyBindings,
+    estimationSheet.excludedLines,
+    estimationSheet.parameterOverrides,
+    estimationSheet.parameterBindings,
+    buildUpEmptyHint,
+  ])
 
   const selectedElementCost = useMemo(() => {
     if (!estimationUiOpen || selectedIds.size !== 1) return null
@@ -2118,6 +2199,10 @@ export default function App() {
       quantities,
       measureIfc: measureBoqIfcIds,
       shareCount: node.ids.length,
+      assembly,
+      parameterOverrides: estimationSheet.parameterOverrides,
+      parameterBindings: estimationSheet.parameterBindings,
+      propertyCatalog,
     })
     if (!build) return null
     return {
@@ -2129,10 +2214,13 @@ export default function App() {
   }, [
     assemblyCatalog,
     estimationSheet.excludedLines,
+    estimationSheet.parameterBindings,
+    estimationSheet.parameterOverrides,
     estimationSheet.qtyBindings,
     estimationSheet.root,
     estimationUiOpen,
     measureBoqIfcIds,
+    propertyCatalog,
     quantities,
     selectedIds,
     store,
@@ -2934,6 +3022,21 @@ export default function App() {
           {selectedElementCost ? <ElementCostCard {...selectedElementCost} /> : null}
         </div>
         {estimationUiOpen && estimationPanes.buildup ? (
+          buildupPopped ? (
+            <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border bg-muted/60 px-3 py-1.5 text-[12px] text-muted-foreground">
+              <span>Assembly build-up is open in its own window.</span>
+              <button
+                type="button"
+                className="rounded px-2 py-1 text-[12px] font-medium text-foreground hover:bg-accent"
+                onClick={() => {
+                  setBuildupPopped(false)
+                  void closePaneWindow('buildup')
+                }}
+              >
+                Dock back
+              </button>
+            </div>
+          ) : (
           <>
             <ResizeHandle
               axis="y"
@@ -2950,18 +3053,18 @@ export default function App() {
                 propertyCatalog={propertyCatalog}
                 bindings={estimationSheet.qtyBindings ?? {}}
                 excludedLines={estimationSheet.excludedLines ?? {}}
+                parameterOverrides={estimationSheet.parameterOverrides ?? {}}
                 onBind={onBindBuildUpQty}
                 onExcludedChange={onExcludedBuildUpChange}
+                onParameterOverrideChange={onParameterOverrideChange}
                 measureIfc={measureBoqIfc}
                 onClose={() => setEstimationPane('buildup', false)}
-                emptyHint={
-                  selectedBoq
-                    ? 'Assign an assembly on this BOQ line to see labour, material and plant.'
-                    : 'Select a BOQ line to see the assembly cost build-up.'
-                }
+                onPopOut={onPopOutBuildUp}
+                emptyHint={buildUpEmptyHint}
               />
             </div>
           </>
+          )
         ) : null}
         </div>
         {estimationUiOpen ? (

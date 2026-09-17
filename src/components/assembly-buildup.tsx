@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Check, ChevronDown, ChevronRight, Minus, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, ExternalLink, Minus, X } from 'lucide-react'
 import type { CostAssembly, CostKind } from '@/lib/cost-assembly/types'
 import { displayText, englishHint } from '@/lib/cost-assembly/types'
 import { COST_KIND_LABEL, COST_KIND_SHORT, formatAssemblyMoney, formatAssemblyQty, formatAssemblyUnit } from '@/lib/cost-assembly/search'
 import { buildUpRows, type BuildUpRow } from '@/lib/cost-assembly/build-up'
+import { ancestorMultipliers, evaluatedRowQty } from '@/lib/cost-assembly/evaluate'
+import { displayParameterValue, makeParameterResolver } from '@/lib/cost-assembly/params'
 import {
   TAKEOFF_QTY_FIELDS,
   computedLineAmount,
+  measureTakeoff,
   measuredLineQty,
   parseQtySourceValue,
   qtyBindingKey,
@@ -14,6 +17,16 @@ import {
   resolveQtyBinding,
   type QtyBinding,
 } from '@/lib/estimation/qty-bind'
+import {
+  buildMeasuredParams,
+  isLiveQuantityParameter,
+  paramBindingKey,
+  paramSourceValue,
+  parseParamSourceValue,
+  resolveParamBinding,
+  withCombine,
+  type ParamBinding,
+} from '@/lib/estimation/param-bind'
 import { groupIncludeState, isLineExcluded, setLineIncluded } from '@/lib/estimation/include'
 import type { PropertyCatalogSet } from '@/lib/bim-sql'
 import { propertyRefKey, propertyRefLabel, type PropertyRef } from '@/lib/property-tree'
@@ -38,11 +51,17 @@ type AssemblyBuildUpProps = {
   propertyCatalog?: PropertyCatalogSet[]
   bindings?: Record<string, QtyBinding>
   excludedLines?: Record<string, boolean>
+  parameterOverrides?: Record<string, string>
+  parameterBindings?: Record<string, ParamBinding>
   onBind?: (rowId: string, binding: QtyBinding) => void
   onExcludedChange?: (excluded: Record<string, boolean>) => void
+  onParameterOverrideChange?: (code: string, value: string) => void
+  onParamBindingChange?: (code: string, binding: ParamBinding) => void
   measureIfc?: (ref: PropertyRef) => number
   emptyHint?: string
   onClose?: () => void
+  /** Shows a "pop out" button that detaches this panel into its own window (multi-monitor). */
+  onPopOut?: () => void
 }
 
 export function AssemblyBuildUp({
@@ -53,11 +72,16 @@ export function AssemblyBuildUp({
   propertyCatalog = [],
   bindings = {},
   excludedLines = {},
+  parameterOverrides = {},
+  parameterBindings = {},
   onBind,
   onExcludedChange,
+  onParameterOverrideChange,
+  onParamBindingChange,
   measureIfc,
   emptyHint,
   onClose,
+  onPopOut,
 }: AssemblyBuildUpProps) {
   if (!assembly) {
     return (
@@ -79,10 +103,15 @@ export function AssemblyBuildUp({
       propertyCatalog={propertyCatalog}
       bindings={bindings}
       excludedLines={excludedLines}
+      parameterOverrides={parameterOverrides}
+      parameterBindings={parameterBindings}
       onBind={onBind}
       onExcludedChange={onExcludedChange}
+      onParameterOverrideChange={onParameterOverrideChange}
+      onParamBindingChange={onParamBindingChange}
       measureIfc={measureIfc}
       onClose={onClose}
+      onPopOut={onPopOut}
     />
   )
 }
@@ -111,10 +140,15 @@ function AssemblyBuildUpBody({
   propertyCatalog,
   bindings,
   excludedLines,
+  parameterOverrides,
+  parameterBindings,
   onBind,
   onExcludedChange,
+  onParameterOverrideChange,
+  onParamBindingChange,
   measureIfc,
   onClose,
+  onPopOut,
 }: {
   assembly: CostAssembly
   elementIds: number[]
@@ -123,16 +157,27 @@ function AssemblyBuildUpBody({
   propertyCatalog: PropertyCatalogSet[]
   bindings: Record<string, QtyBinding>
   excludedLines: Record<string, boolean>
+  parameterOverrides: Record<string, string>
+  parameterBindings: Record<string, ParamBinding>
   onBind?: (rowId: string, binding: QtyBinding) => void
   onExcludedChange?: (excluded: Record<string, boolean>) => void
+  onParameterOverrideChange?: (code: string, value: string) => void
+  onParamBindingChange?: (code: string, binding: ParamBinding) => void
   measureIfc?: (ref: PropertyRef) => number
   onClose?: () => void
+  onPopOut?: () => void
 }) {
   const title = englishHint(assembly.description) || displayText(assembly.description)
   const takeoff = assemblyQty != null && Number.isFinite(assemblyQty) ? assemblyQty : null
   const rows = useMemo(() => buildUpRows(assembly.details), [assembly])
+  // "_LVMenge" means "the real bound quantity" - not something a person types in here.
+  const editableParameters = useMemo(
+    () => assembly.parameters.filter((parameter) => !isLiveQuantityParameter(parameter)),
+    [assembly.parameters],
+  )
   const groupIds = useMemo(() => rows.filter((row) => row.hasChildren).map((row) => row.id), [rows])
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(groupIds))
+  const [parametersOpen, setParametersOpen] = useState(false)
   const [excludedDraft, setExcludedDraft] = useState<Record<string, boolean> | null>(null)
   const excluded = excludedDraft ?? excludedLines
   const qtyCatalog = useMemo(() => {
@@ -149,6 +194,25 @@ function AssemblyBuildUpBody({
     setExpanded(new Set(rows.filter((row) => row.hasChildren).map((row) => row.id)))
   }, [assembly.id, rows])
 
+  const measuredParams = useMemo(
+    () =>
+      buildMeasuredParams(
+        assembly.parameters,
+        parameterBindings,
+        assembly.id,
+        elementIds,
+        (ids, field) => measureTakeoff(ids, field, quantities),
+        measureIfc ? (_ids, ref) => measureIfc(ref) : undefined,
+        propertyCatalog,
+      ),
+    [assembly, parameterBindings, elementIds, quantities, measureIfc, propertyCatalog],
+  )
+  const resolve = useMemo(
+    () => makeParameterResolver(assembly, parameterOverrides, takeoff, measuredParams),
+    [assembly, parameterOverrides, takeoff, measuredParams],
+  )
+  const multipliers = useMemo(() => ancestorMultipliers(rows, resolve), [rows, resolve])
+
   const computed = useMemo(() => {
     const qtyById = new Map<string, number>()
     const unitById = new Map<string, string>()
@@ -156,7 +220,7 @@ function AssemblyBuildUpBody({
     const amountById = new Map<string, number>()
     const bindingById = new Map<string, QtyBinding>()
     const excludedById = new Map<string, boolean>()
-    const ctx = { ids: elementIds, assemblyQty: takeoff, quantities, measureIfc }
+    const ctx = { ids: elementIds, assemblyQty: takeoff, quantities, measureIfc, resolve }
     for (const row of rows) {
       if (row.hasChildren) continue
       const binding = resolveQtyBinding(row, bindings[qtyBindingKey(assembly.id, row.id)])
@@ -166,7 +230,8 @@ function AssemblyBuildUpBody({
       const measured = measuredLineQty(row, binding, ctx)
       qtyById.set(row.id, measured.qty)
       unitById.set(row.id, measured.unit)
-      const gross = computedLineAmount(row, measured.qty)
+      const ancestorMultiplier = multipliers.get(row.id) ?? 1
+      const gross = computedLineAmount(row, measured.qty) * ancestorMultiplier
       grossById.set(row.id, gross)
       amountById.set(row.id, lineExcluded ? 0 : gross)
     }
@@ -177,7 +242,7 @@ function AssemblyBuildUpBody({
       const amount = children.reduce((total, child) => total + (amountById.get(child.id) ?? 0), 0)
       grossById.set(row.id, gross)
       amountById.set(row.id, amount)
-      qtyById.set(row.id, row.qty ?? 0)
+      qtyById.set(row.id, evaluatedRowQty(row, resolve))
       unitById.set(row.id, row.unit)
       const state = groupIncludeState(rows, excluded, assembly.id, row.id)
       excludedById.set(row.id, state === 'none')
@@ -194,7 +259,7 @@ function AssemblyBuildUpBody({
       if (row.hasChildren && row.parentId == null) total += amountById.get(row.id) ?? 0
     }
     return { qtyById, unitById, grossById, amountById, bindingById, excludedById, kinds, total }
-  }, [assembly.id, rows, bindings, excluded, elementIds, takeoff, quantities, measureIfc])
+  }, [assembly.id, rows, bindings, excluded, elementIds, takeoff, quantities, measureIfc, resolve, multipliers])
 
   const visible = useMemo(() => {
     const hidden = new Set<string>()
@@ -265,17 +330,124 @@ function AssemblyBuildUpBody({
             ) : null,
           )}
         </div>
-        {onClose ? (
-          <button
-            type="button"
-            className="ml-auto flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="Hide assembly"
-            onClick={onClose}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
+        {onPopOut || onClose ? (
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            {onPopOut ? (
+              <button
+                type="button"
+                className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                title="Move to another window (drag it to a second monitor)"
+                onClick={onPopOut}
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+            {onClose ? (
+              <button
+                type="button"
+                className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                title="Hide assembly"
+                onClick={onClose}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
+      {editableParameters.length > 0 ? (
+        <div className="shrink-0 border-b border-border px-3 py-1">
+          <button
+            type="button"
+            className="flex items-center gap-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground hover:text-foreground"
+            onClick={() => setParametersOpen((value) => !value)}
+          >
+            {parametersOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            Parameters ({editableParameters.length})
+          </button>
+          {parametersOpen ? (
+          <div className="mt-1 space-y-1 pb-1">
+            {editableParameters.map((parameter) => {
+              const stored = parameterBindings[paramBindingKey(assembly.id, parameter.code)]
+              const binding = resolveParamBinding(parameter, stored, propertyCatalog)
+              const label = englishHint([{ language: 'en', value: parameter.description }]) || parameter.code
+              const canAverage = elementIds.length > 1
+              return (
+                <div key={parameter.code} className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                  <span className="w-32 shrink-0 truncate text-muted-foreground" title={label}>
+                    {label}
+                  </span>
+                  <select
+                    className="h-6 max-w-[11rem] shrink-0 rounded border border-border bg-card px-1 text-[11px]"
+                    value={paramSourceValue(binding)}
+                    title="Where this value comes from - model data first, manual only as a last resort"
+                    onChange={(event) => {
+                      const source = parseParamSourceValue(event.target.value)
+                      if (!source) return
+                      const combine = binding.mode !== 'manual' ? binding.combine : 'sum'
+                      onParamBindingChange?.(parameter.code, withCombine(source, combine))
+                    }}
+                  >
+                    <option value="manual">Manual value</option>
+                    <optgroup label="From geometry">
+                      {TAKEOFF_QTY_FIELDS.map((item) => (
+                        <option key={item.field} value={`takeoff:${item.field}`}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                    {qtyCatalog.map((group) => (
+                      <optgroup key={`${group.kind}:${group.set}`} label={group.set}>
+                        {group.names.map((name) => {
+                          const ref: PropertyRef = { set: group.set, name, kind: group.kind }
+                          return (
+                            <option key={propertyRefKey(ref)} value={`ifc:${propertyRefKey(ref)}`}>
+                              {propertyRefLabel(ref)}
+                            </option>
+                          )
+                        })}
+                      </optgroup>
+                    ))}
+                  </select>
+                  {binding.mode !== 'manual' && canAverage ? (
+                    <select
+                      className="h-6 shrink-0 rounded border border-border bg-card px-1 text-[11px]"
+                      value={binding.combine}
+                      title="Sum across all objects on this line, or average per object"
+                      onChange={(event) =>
+                        onParamBindingChange?.(parameter.code, {
+                          ...binding,
+                          combine: event.target.value === 'average' ? 'average' : 'sum',
+                        })
+                      }
+                    >
+                      <option value="sum">Sum</option>
+                      <option value="average">Average</option>
+                    </select>
+                  ) : null}
+                  {binding.mode === 'manual' ? (
+                    <input
+                      className="h-6 w-20 shrink-0 rounded border border-border bg-card px-1 font-mono text-[11px]"
+                      defaultValue={displayParameterValue(parameter, parameterOverrides, assembly.id)}
+                      key={`${assembly.id}-${parameter.code}-${displayParameterValue(parameter, parameterOverrides, assembly.id)}`}
+                      onBlur={(event) => onParameterOverrideChange?.(parameter.code, event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') event.currentTarget.blur()
+                      }}
+                    />
+                  ) : (
+                    <span className="font-mono text-[11px] tabular-nums" title="Measured from the model">
+                      {formatAssemblyQty(resolve(parameter.code))}
+                    </span>
+                  )}
+                  {parameter.unit ? <span className="text-muted-foreground">{formatAssemblyUnit(parameter.unit)}</span> : null}
+                </div>
+              )
+            })}
+          </div>
+          ) : null}
+        </div>
+      ) : null}
       <div className="min-h-0 flex-1 overflow-auto bg-background px-2 py-1">
         <div className="mb-1 flex items-center gap-2 px-1">
           <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Cost items</p>

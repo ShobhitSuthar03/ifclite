@@ -1,0 +1,9 @@
+{
+  "identifier": "pane",
+  "description": "Detached estimation panes (BOQ, build-up, agent chat) get core defaults and events so they can stay in sync with the main window, but nothing else.",
+  "windows": ["pane-*"],
+  "permissions": [
+    "core:default",
+    "core:event:default"
+  ]
+}

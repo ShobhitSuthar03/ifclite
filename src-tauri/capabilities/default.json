@@ -5,6 +5,7 @@
   "permissions": [
     "core:default",
     "core:event:default",
+    "core:webview:allow-create-webview-window",
     "dialog:default"
   ]
 }
