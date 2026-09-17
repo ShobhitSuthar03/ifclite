@@ -1,4 +1,5 @@
 import type { PropertyRef } from '@/lib/property-tree'
+import type { ParamBinding } from '@/lib/estimation/param-bind'
 import type { QtyBinding } from '@/lib/estimation/qty-bind'
 
 export type BoqKind = 'heading' | 'item'
@@ -27,6 +28,12 @@ export type BoqDoc = {
   root: BoqNode[]
   qtyBindings: Record<string, QtyBinding>
   excludedLines: Record<string, boolean>
+  /** User-entered values for assembly Parameters (concrete grade, rebar kg/m3, ...), keyed by
+   *  parameterOverrideKey(assemblyId, parameterCode). */
+  parameterOverrides: Record<string, string>
+  /** How each geometry-shaped Parameter's value should be measured (manual vs. real per-object
+   *  takeoff/IFC data), keyed by paramBindingKey(assemblyId, parameterCode). */
+  parameterBindings: Record<string, ParamBinding>
 }
 
 export type EstimationDoc = {
@@ -50,6 +57,8 @@ export function emptyBoq(overrides: Partial<BoqDoc> = {}): BoqDoc {
     root: overrides.root ?? [],
     qtyBindings: overrides.qtyBindings ?? {},
     excludedLines: overrides.excludedLines ?? {},
+    parameterOverrides: overrides.parameterOverrides ?? {},
+    parameterBindings: overrides.parameterBindings ?? {},
   }
 }
 
@@ -122,5 +131,12 @@ export function removeBoq(doc: EstimationDoc, id: string): EstimationDoc {
 }
 
 export function clearEstimationBoq(doc: EstimationDoc): EstimationDoc {
-  return mapActiveBoq(doc, (boq) => ({ ...boq, root: [], qtyBindings: {}, excludedLines: {} }))
+  return mapActiveBoq(doc, (boq) => ({
+    ...boq,
+    root: [],
+    qtyBindings: {},
+    excludedLines: {},
+    parameterOverrides: {},
+    parameterBindings: {},
+  }))
 }

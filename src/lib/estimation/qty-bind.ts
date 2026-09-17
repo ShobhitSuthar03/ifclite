@@ -1,31 +1,22 @@
+import type { PropertyCatalogSet } from '@/lib/bim-sql'
 import type { BuildUpRow } from '@/lib/cost-assembly/build-up'
-import type { CostKind } from '@/lib/cost-assembly/types'
+import type { CostAssembly, CostKind } from '@/lib/cost-assembly/types'
+import { ancestorMultipliers, evaluatedRowQty } from '@/lib/cost-assembly/evaluate'
+import type { FormulaResolver } from '@/lib/cost-assembly/formula'
+import { makeParameterResolver } from '@/lib/cost-assembly/params'
 import type { AreaMetrics, QuantityResult } from '@/lib/geometry-qto'
+import { buildMeasuredParams, type ParamBinding } from '@/lib/estimation/param-bind'
 import { quantityForIds } from '@/lib/estimation/qty'
+import { isTakeoffField, takeoffFieldMeta, TAKEOFF_QTY_FIELDS } from '@/lib/estimation/takeoff-fields'
 import { propertyRefKey, type PropertyRef } from '@/lib/property-tree'
+
+export { TAKEOFF_QTY_FIELDS, isTakeoffField, takeoffFieldMeta }
 
 export type QtyBinding =
   | { mode: 'catalog' }
   | { mode: 'assembly' }
   | { mode: 'takeoff'; field: keyof AreaMetrics }
   | { mode: 'ifc'; property: PropertyRef }
-
-export const TAKEOFF_QTY_FIELDS: Array<{ field: keyof AreaMetrics; label: string; unit: string }> = [
-  { field: 'VOLUME', label: 'Volume', unit: 'm³' },
-  { field: 'LATERALAREA', label: 'Lateral area', unit: 'm²' },
-  { field: 'GROSSAREA', label: 'Gross area', unit: 'm²' },
-  { field: 'AREAMAX', label: 'Max area', unit: 'm²' },
-  { field: 'UNDERAREA', label: 'Soffit area', unit: 'm²' },
-  { field: 'TOPAREA', label: 'Top area', unit: 'm²' },
-  { field: 'FOOTPRINTAREA', label: 'Footprint', unit: 'm²' },
-  { field: 'COVEREDAREA', label: 'Covered area', unit: 'm²' },
-  { field: 'LENGTH', label: 'Length', unit: 'm' },
-  { field: 'WIDTH', label: 'Width', unit: 'm' },
-  { field: 'HEIGHT', label: 'Height', unit: 'm' },
-  { field: 'COUNT', label: 'Count', unit: 'nr' },
-]
-
-const TAKEOFF_FIELD_SET = new Set(TAKEOFF_QTY_FIELDS.map((item) => item.field))
 
 export function qtyBindingKey(assemblyId: string, rowId: string): string {
   return `${assemblyId}::${rowId}`
@@ -74,10 +65,6 @@ export function suggestQtyBinding(row: BuildUpRow): QtyBinding {
 export function resolveQtyBinding(row: BuildUpRow, stored: QtyBinding | undefined): QtyBinding {
   if (stored) return stored
   return suggestQtyBinding(row)
-}
-
-export function takeoffFieldMeta(field: keyof AreaMetrics): { field: keyof AreaMetrics; label: string; unit: string } {
-  return TAKEOFF_QTY_FIELDS.find((item) => item.field === field) ?? { field, label: String(field), unit: '' }
 }
 
 export function qtyBindingLabel(binding: QtyBinding): string {
@@ -132,6 +119,9 @@ export type QtyMeasureContext = {
   assemblyQty: number | null
   quantities: QuantityResult | null
   measureIfc?: (ref: PropertyRef) => number
+  /** Resolves assembly Parameters (with overrides) so 'catalog' mode can re-evaluate a row's
+   *  QuantityDetail formula instead of trusting the catalog's static, possibly stale, Quantity. */
+  resolve?: FormulaResolver
 }
 
 export function measuredLineQty(
@@ -139,7 +129,7 @@ export function measuredLineQty(
   binding: QtyBinding,
   ctx: QtyMeasureContext,
 ): { qty: number; unit: string } {
-  const catalogQty = row.qty ?? 0
+  const catalogQty = ctx.resolve ? evaluatedRowQty(row, ctx.resolve) : (row.qty ?? 0)
   if (binding.mode === 'catalog') return { qty: catalogQty, unit: row.unit }
   if (binding.mode === 'assembly') {
     const assemblyQty = ctx.assemblyQty != null && Number.isFinite(ctx.assemblyQty) ? ctx.assemblyQty : 0
@@ -187,19 +177,50 @@ export function elementBuildUps(input: {
   quantities: QuantityResult | null
   measureIfc?: (ids: number[], ref: PropertyRef) => number
   shareCount?: number
+  assembly?: Pick<CostAssembly, 'id' | 'parameters'>
+  parameterOverrides?: Record<string, string>
+  parameterBindings?: Record<string, ParamBinding>
+  propertyCatalog?: PropertyCatalogSet[]
 }): ElementBuildUp[] {
-  const { rows, ids, assemblyId, assemblyUom, bindings, excluded, quantities, measureIfc } = input
+  const {
+    rows,
+    ids,
+    assemblyId,
+    assemblyUom,
+    bindings,
+    excluded,
+    quantities,
+    measureIfc,
+    assembly,
+    parameterOverrides,
+    parameterBindings,
+    propertyCatalog,
+  } = input
   const leaves = rows.filter((row) => !row.hasChildren)
   const share = Math.max(input.shareCount ?? ids.length, 1)
   return ids.map((expressId) => {
     const one = [expressId]
     const assemblyQty = quantityForIds(one, assemblyUom, quantities).qty
     const qto = quantities?.elements.find((item) => item.expressId === expressId) ?? null
+    const measuredParams = assembly
+      ? buildMeasuredParams(
+          assembly.parameters,
+          parameterBindings ?? {},
+          assembly.id,
+          one,
+          (measureIds, field) => measureTakeoff(measureIds, field, quantities),
+          measureIfc,
+          propertyCatalog ?? [],
+        )
+      : undefined
+    const resolve = assembly ? makeParameterResolver(assembly, parameterOverrides, assemblyQty, measuredParams) : undefined
+    const multipliers = resolve ? ancestorMultipliers(rows, resolve) : null
     const ctx: QtyMeasureContext = {
       ids: one,
       assemblyQty,
       quantities,
       measureIfc: (ref) => measureIfc?.(one, ref) ?? 0,
+      resolve,
     }
     const lines: ElementBuildUpLine[] = []
     let total = 0
@@ -208,10 +229,11 @@ export function elementBuildUps(input: {
       const binding = resolveQtyBinding(row, bindings[qtyBindingKey(assemblyId, row.id)])
       const measured =
         binding.mode === 'catalog'
-          ? { qty: (row.qty ?? 0) / share, unit: row.unit }
+          ? { qty: (resolve ? evaluatedRowQty(row, resolve) : (row.qty ?? 0)) / share, unit: row.unit }
           : measuredLineQty(row, binding, ctx)
       const lineExcluded = Boolean(excluded[qtyBindingKey(assemblyId, row.id)])
-      const gross = computedLineAmount(row, measured.qty)
+      const ancestorMultiplier = multipliers?.get(row.id) ?? 1
+      const gross = computedLineAmount(row, measured.qty) * ancestorMultiplier
       const amount = lineExcluded ? 0 : gross
       if (binding.mode === 'takeoff' && binding.field === 'LATERALAREA') formwork = measured.qty
       lines.push({
@@ -235,10 +257,6 @@ export function elementBuildUps(input: {
       measured: qto != null,
     }
   })
-}
-
-function isTakeoffField(value: string): value is keyof AreaMetrics {
-  return TAKEOFF_FIELD_SET.has(value as keyof AreaMetrics)
 }
 
 function parseBindingProperty(value: unknown): PropertyRef | null {

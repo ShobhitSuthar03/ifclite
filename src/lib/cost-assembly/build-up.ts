@@ -10,6 +10,8 @@ export type BuildUpRow = {
   code: string
   description: string
   qty: number | null
+  /** The raw QuantityDetail formula string this row's `qty` was computed from, if any. */
+  quantityDetail?: string
   unit: string
   factor: number
   extraFactors: number
@@ -43,6 +45,7 @@ function subItemRows(item: SubItem, indent: number, id: string, parentId: string
       code: item.number,
       description: englishHint(item.text) || displayText(item.text) || 'Group',
       qty: item.quantity,
+      quantityDetail: item.quantityDetail,
       unit: item.unitOfMeasure ?? '',
       factor: item.factor,
       extraFactors: item.costFactor,
@@ -71,6 +74,7 @@ function componentRow(component: CostComponent, indent: number, id: string, pare
     code: component.name,
     description: extra || englishHint(component.description) || displayText(component.description),
     qty: component.quantity,
+    quantityDetail: component.quantityDetail,
     unit: '',
     factor: component.factor,
     extraFactors: component.costFactor * component.cFactor * component.qFactor,

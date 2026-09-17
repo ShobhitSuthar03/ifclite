@@ -1,6 +1,8 @@
 import { parsePropertyRef, parsePropertyRefs, type PropertyRef } from '@/lib/property-tree'
 import { uniquePositiveIds } from '@/lib/saved-views'
+import { parseParameterOverrides } from '@/lib/cost-assembly/params'
 import { parseExcludedLines } from '@/lib/estimation/include'
+import { parseParamBindings } from '@/lib/estimation/param-bind'
 import { parseQtyBindings } from '@/lib/estimation/qty-bind'
 import {
   emptyBoq,
@@ -42,6 +44,8 @@ function parseBoqDoc(value: unknown, fallbackId: string, seen: Set<string>): Boq
     root?: unknown
     qtyBindings?: unknown
     excludedLines?: unknown
+    parameterOverrides?: unknown
+    parameterBindings?: unknown
   }
   let id = typeof row.id === 'string' ? row.id.trim() : ''
   if (!id || seen.has(id)) id = fallbackId
@@ -55,6 +59,8 @@ function parseBoqDoc(value: unknown, fallbackId: string, seen: Set<string>): Boq
     root: parseBoqNodes(row.root),
     qtyBindings: parseQtyBindings(row.qtyBindings),
     excludedLines: parseExcludedLines(row.excludedLines),
+    parameterOverrides: parseParameterOverrides(row.parameterOverrides),
+    parameterBindings: parseParamBindings(row.parameterBindings),
   }
 }
 
