@@ -132,3 +132,10 @@ export async function writeIfcFile(path: string, bytes: Uint8Array): Promise<voi
     headers: { 'x-output-path': encodeURIComponent(path) },
   })
 }
+
+/**
+ * `write_ifc_file` has no IFC-specific behaviour on the Rust side (it just
+ * writes whatever bytes it's given to whatever path the header names), so
+ * exported tables/reports reuse it under a name that doesn't imply IFC.
+ */
+export const writeExportedFile = writeIfcFile

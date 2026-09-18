@@ -1,7 +1,8 @@
-import { GeometryProcessor } from '@ifc-lite/geometry'
+import { save as saveFileDialog } from '@tauri-apps/plugin-dialog'
 import { filterQuantities, type QuantityResult } from '@/lib/geometry-qto'
-import { getGeometryProcessor } from '@/lib/ifc-loader'
-import { isDesktopShell as isTauri } from '@/lib/host'
+import { isDesktopShell } from '@/lib/host'
+import { writeExportedFile } from '@/lib/projects'
+import type { CsvWorkerRequest, CsvWorkerResponse } from '@/lib/csv-export.worker'
 
 export type CsvMode = 'entities' | 'properties' | 'quantities' | 'spatial' | 'areas' | 'formwork'
 export type IfcCsvMode = Exclude<CsvMode, 'areas' | 'formwork'>
@@ -24,12 +25,6 @@ export const CSV_SCOPES: Array<{ value: CsvScope; label: string; hint: string }>
   { value: 'selected', label: 'Selected', hint: 'Every element currently selected' },
 ]
 
-export const CSV_DELIMITERS: Array<{ value: CsvDelimiter; label: string }> = [
-  { value: ',', label: 'Comma' },
-  { value: ';', label: 'Semicolon' },
-  { value: '\t', label: 'Tab' },
-]
-
 export type CsvExportRequest = {
   bytes: Uint8Array
   fileName: string
@@ -46,40 +41,60 @@ export type CsvExportResult = {
   rowCount: number
 }
 
-let wasmProcessor: Promise<GeometryProcessor> | null = null
+// `exportCsv` is a single blocking WASM call with no yield points, so it runs
+// in a dedicated worker instead of the main thread - otherwise the whole
+// window (not just this tab) hangs for however long the export takes.
+let csvWorker: Worker | null = null
+let csvWorkerRequestId = 0
+const csvWorkerPending = new Map<number, { resolve: (text: string) => void; reject: (error: Error) => void }>()
 
-export async function recycleCsvProcessor(): Promise<void> {
-  const pending = wasmProcessor
-  wasmProcessor = null
-  if (!pending) return
-  try {
-    const processor = await pending
-    processor.dispose()
-  } catch {
-    // Drop a poisoned CSV WASM instance; the next export builds a new one.
-  }
+function failAllPending(message: string) {
+  for (const pending of csvWorkerPending.values()) pending.reject(new Error(message))
+  csvWorkerPending.clear()
 }
 
-async function getCsvProcessor(): Promise<GeometryProcessor> {
-  if (!isTauri()) return getGeometryProcessor()
-  if (!wasmProcessor) {
-    wasmProcessor = (async () => {
-      const processor = new GeometryProcessor({ preferNative: false, enableInstancing: false })
-      await processor.init()
-      return processor
-    })()
+export async function recycleCsvProcessor(): Promise<void> {
+  failAllPending('CSV export was cancelled.')
+  csvWorker?.terminate()
+  csvWorker = null
+}
+
+function getCsvWorker(): Worker {
+  if (csvWorker) return csvWorker
+  const worker = new Worker(new URL('./csv-export.worker.ts', import.meta.url), { type: 'module' })
+  worker.onmessage = (event: MessageEvent<CsvWorkerResponse>) => {
+    const pending = csvWorkerPending.get(event.data.id)
+    if (!pending) return
+    csvWorkerPending.delete(event.data.id)
+    if (event.data.ok) pending.resolve(event.data.text)
+    else pending.reject(new Error(event.data.error))
   }
-  return wasmProcessor
+  worker.onerror = (event) => {
+    failAllPending(event.message || 'CSV export worker crashed.')
+    worker.terminate()
+    if (csvWorker === worker) csvWorker = null
+  }
+  csvWorker = worker
+  return worker
+}
+
+function exportCsvOffMainThread(
+  bytes: Uint8Array,
+  mode: string,
+  delimiter: string,
+  includeProperties: boolean,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const id = ++csvWorkerRequestId
+    csvWorkerPending.set(id, { resolve, reject })
+    const request: CsvWorkerRequest = { id, bytes, mode, delimiter, includeProperties }
+    getCsvWorker().postMessage(request)
+  })
 }
 
 export async function exportIfcCsv(request: CsvExportRequest): Promise<CsvExportResult> {
-  const processor = await getCsvProcessor()
   const includeProperties = request.mode === 'entities' && request.includeProperties
-  const raw = processor.exportCsv(request.bytes, request.mode, request.delimiter, includeProperties)
-  if (!raw) {
-    throw new Error('CSV export needs the WASM geometry engine. It is unavailable on this host.')
-  }
-  const source = new TextDecoder().decode(raw)
+  const source = await exportCsvOffMainThread(request.bytes, request.mode, request.delimiter, includeProperties)
   const { text, rowCount } = request.keepIds
     ? filterCsvByIds(source, request.delimiter, request.keepIds, request.mode === 'spatial')
     : { text: source, rowCount: Math.max(0, parseCsvRecords(source, request.delimiter).length - 1) }
@@ -92,7 +107,7 @@ export async function exportIfcCsv(request: CsvExportRequest): Promise<CsvExport
 
 export function csvFileName(fileName: string, mode: CsvMode, scope: CsvScope): string {
   const base = fileName.replace(/\.(ifc|ifczip)$/i, '') || 'model'
-  return `${base}-${mode}-${scope}.csv`
+  return `${base}-${mode}-${scope}.xls`
 }
 
 export function resolveCsvKeepIds(
@@ -113,14 +128,75 @@ export function resolveCsvKeepIds(
   }
 }
 
-export function downloadCsvFile(fileName: string, text: string) {
-  const blob = new Blob([text], { type: 'text/csv;charset=utf-8' })
+function xmlEscape(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+/** SpreadsheetML - a plain-text XML format Excel opens as a real table (real
+ * columns/rows, not comma-separated text pretending to be one), without
+ * needing a binary zip-based xlsx writer library. */
+function tableToSpreadsheetXml(rows: string[][], sheetName: string): string {
+  const body = rows
+    .map((row, rowIndex) => {
+      const cells = row
+        .map((cell) => {
+          const numeric = rowIndex > 0 && cell !== '' && Number.isFinite(Number(cell))
+          const style = rowIndex === 0 ? ' ss:StyleID="Header"' : ''
+          return `<Cell${style}><Data ss:Type="${numeric ? 'Number' : 'String'}">${xmlEscape(cell)}</Data></Cell>`
+        })
+        .join('')
+      return `<Row>${cells}</Row>`
+    })
+    .join('\n')
+  const safeName = sheetName.replace(/[\\/?*[\]:]/g, '_').slice(0, 31) || 'Sheet1'
+  return `<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <Styles>
+  <Style ss:ID="Header"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#1F4E79" ss:Pattern="Solid"/></Style>
+ </Styles>
+ <Worksheet ss:Name="${xmlEscape(safeName)}">
+  <Table>
+${body}
+  </Table>
+ </Worksheet>
+</Workbook>`
+}
+
+/** Converts a generated CSV result into the bytes of a real Excel table. */
+export function tableResultToXlsBytes(result: CsvExportResult, delimiter: CsvDelimiter, sheetName: string): Uint8Array {
+  const rows = parseCsvRecords(result.text, delimiter)
+  return new TextEncoder().encode(tableToSpreadsheetXml(rows, sheetName))
+}
+
+/**
+ * Saves exported table bytes. On desktop this opens a native "Save As"
+ * dialog and writes to the chosen path (unlike a browser download, which
+ * always lands wherever the OS/browser sends downloads with no picker and no
+ * confirmed path) - matching how "Export IFC" already behaves. Returns the
+ * saved path on desktop, or null in the browser (blob download, no path to
+ * report) or if the user cancelled the dialog.
+ */
+export async function saveExportedTable(fileName: string, bytes: Uint8Array): Promise<string | null> {
+  if (isDesktopShell()) {
+    const path = await saveFileDialog({
+      title: 'Export table',
+      defaultPath: fileName,
+      filters: [{ name: 'Excel', extensions: ['xls'] }],
+    })
+    if (!path) return null
+    await writeExportedFile(path, bytes)
+    return path
+  }
+  const blob = new Blob([bytes.slice()], { type: 'application/vnd.ms-excel' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
   link.download = fileName
   link.click()
   URL.revokeObjectURL(url)
+  return null
 }
 
 export function filterCsvByIds(

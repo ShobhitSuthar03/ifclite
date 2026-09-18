@@ -2,20 +2,21 @@ import { useMemo, useState } from 'react'
 import { Download, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
-  CSV_DELIMITERS,
   CSV_MODES,
   CSV_SCOPES,
-  downloadCsvFile,
   exportAreasCsv,
   exportFormworkCsv,
   exportIfcCsv,
   resolveCsvKeepIds,
-  type CsvDelimiter,
+  saveExportedTable,
+  tableResultToXlsBytes,
   type CsvMode,
   type CsvScope,
 } from '@/lib/csv-export'
 import type { QuantityResult } from '@/lib/geometry-qto'
 import { cn, formatCount } from '@/lib/utils'
+
+const CSV_DELIMITER = ','
 
 const fieldClass =
   'h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus-visible:border-primary disabled:opacity-50'
@@ -43,7 +44,6 @@ export function CsvExportPanel({
 }: CsvExportPanelProps) {
   const [mode, setMode] = useState<CsvMode>('entities')
   const [scope, setScope] = useState<CsvScope>('all')
-  const [delimiter, setDelimiter] = useState<CsvDelimiter>(',')
   const [includeProperties, setIncludeProperties] = useState(true)
   const [busy, setBusy] = useState(false)
 
@@ -57,6 +57,14 @@ export function CsvExportPanel({
     [activeScope, isolatedIds, visibleIds, selectedIds],
   )
 
+  const saveResult = async (result: { fileName: string; text: string; rowCount: number }, noun: string) => {
+    const bytes = tableResultToXlsBytes(result, CSV_DELIMITER, noun)
+    const path = await saveExportedTable(result.fileName, bytes)
+    onExported(
+      `Exported ${formatCount(result.rowCount)} ${noun} row${result.rowCount === 1 ? '' : 's'} → ${path ?? result.fileName}`,
+    )
+  }
+
   const onDownload = async () => {
     if (mode === 'formwork' || mode === 'areas') {
       if (!formwork) {
@@ -67,12 +75,9 @@ export function CsvExportPanel({
       try {
         const result =
           mode === 'areas'
-            ? exportAreasCsv(formwork, fileName, activeScope, delimiter, keepIds)
-            : exportFormworkCsv(formwork, fileName, activeScope, delimiter, keepIds)
-        downloadCsvFile(result.fileName, result.text)
-        onExported(
-          `Exported ${formatCount(result.rowCount)} ${mode === 'areas' ? 'area' : 'face'} row${result.rowCount === 1 ? '' : 's'} → ${result.fileName}`,
-        )
+            ? exportAreasCsv(formwork, fileName, activeScope, CSV_DELIMITER, keepIds)
+            : exportFormworkCsv(formwork, fileName, activeScope, CSV_DELIMITER, keepIds)
+        await saveResult(result, mode === 'areas' ? 'area' : 'face')
       } catch (caught) {
         onError(caught instanceof Error ? caught.message : String(caught))
       } finally {
@@ -81,7 +86,7 @@ export function CsvExportPanel({
       return
     }
     if (!bytes) {
-      onError('Load an IFC file before exporting CSV.')
+      onError('Load an IFC file before exporting a table.')
       return
     }
     setBusy(true)
@@ -90,15 +95,12 @@ export function CsvExportPanel({
         bytes,
         fileName,
         mode,
-        delimiter,
+        delimiter: CSV_DELIMITER,
         includeProperties,
         keepIds,
         scope: activeScope,
       })
-      downloadCsvFile(result.fileName, result.text)
-      onExported(
-        `Exported ${formatCount(result.rowCount)} ${mode} row${result.rowCount === 1 ? '' : 's'} → ${result.fileName}`,
-      )
+      await saveResult(result, mode)
     } catch (caught) {
       onError(caught instanceof Error ? caught.message : String(caught))
     } finally {
@@ -141,20 +143,6 @@ export function CsvExportPanel({
           ))}
         </select>
       </label>
-      <label className="flex flex-col gap-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-        Delimiter
-        <select
-          className={fieldClass}
-          value={delimiter}
-          onChange={(event) => setDelimiter(event.target.value as CsvDelimiter)}
-        >
-          {CSV_DELIMITERS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
       <label className={cn('flex items-center gap-2 text-xs', mode !== 'entities' && 'opacity-50')}>
         <input
           type="checkbox"
@@ -173,7 +161,7 @@ export function CsvExportPanel({
         disabled={busy || (mode === 'formwork' || mode === 'areas' ? !formwork : !bytes)}
       >
         {busy ? <Loader2 className="animate-spin" /> : <Download />}
-        Generate CSV
+        Export table
       </Button>
     </div>
   )
