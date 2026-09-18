@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "VERBIM Viewer",
+  "identifier": "dev.ifclite.viewer-schedule",
+  "build": {
+    "beforeBuildCommand": "npm run build:viewer-schedule"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "VERBIM Viewer",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1060,
+        "minHeight": 640,
+        "dragDropEnabled": true,
+        "center": true,
+        "maximized": true
+      }
+    ]
+  }
+}
