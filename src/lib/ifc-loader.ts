@@ -92,7 +92,8 @@ export function getGeometryProcessor(): Promise<GeometryProcessor> {
         const processor = new GeometryProcessor({
           preferNative: true,
           enableInstancing: false,
-          skipSmallCuts: true,
+          // QTO volume/area need opening voids cut into the host mesh.
+          skipSmallCuts: false,
         })
         await processor.init()
         console.info(`[geometry] engine ready in ${Math.round(performance.now() - started)}ms`)

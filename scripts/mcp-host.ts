@@ -8,14 +8,12 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { timingSafeEqual } from 'node:crypto'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
 import {
-  BearerTokenAuth,
   buildDefaultPromptRegistry,
   buildDefaultToolRegistry,
   createMCPServer,
   fullScope,
-  HttpTransport,
   InMemoryModelRegistry,
   loadIfcModel,
   type CallToolResult,
@@ -48,8 +46,9 @@ const ALLOWED_ORIGINS = new Set(['http://127.0.0.1:43127', 'tauri://localhost', 
 
 function corsHeaders(req: IncomingMessage): Record<string, string> {
   const headers: Record<string, string> = {
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type,Authorization,Mcp-Session-Id',
+    'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization,Mcp-Session-Id,Mcp-Protocol-Version',
+    'Access-Control-Expose-Headers': 'Mcp-Session-Id',
     'Cross-Origin-Resource-Policy': 'same-site',
     'Cache-Control': 'no-store',
     Vary: 'Origin',
@@ -83,8 +82,7 @@ function log(message: string) {
   process.stderr.write(`[ifclite-mcp] ${message}\n`)
 }
 
-async function writeCursorMcpConfig(url: string, token: string) {
-  const path = resolve('.mcp.json')
+async function writeMcpConfigFile(path: string, url: string, token: string) {
   let current: { mcpServers?: Record<string, unknown> } = {}
   try {
     if (existsSync(path)) current = JSON.parse(await readFile(path, 'utf8')) as typeof current
@@ -102,6 +100,12 @@ async function writeCursorMcpConfig(url: string, token: string) {
     },
   }
   await writeFile(path, `${JSON.stringify(next, null, 2)}\n`)
+}
+
+/** Cursor reads project MCP from `.cursor/mcp.json`; keep root `.mcp.json` in sync too. */
+async function writeCursorMcpConfig(url: string, token: string) {
+  await writeMcpConfigFile(resolve('.mcp.json'), url, token)
+  await writeMcpConfigFile(resolve('.cursor/mcp.json'), url, token)
 }
 
 function okResult(text: string, structured?: Record<string, unknown>): CallToolResult {
@@ -230,6 +234,120 @@ function send(req: IncomingMessage, res: ServerResponse, status: number, body: u
   const json = JSON.stringify(body)
   res.writeHead(status, { ...corsHeaders(req), 'Content-Type': 'application/json; charset=utf-8' })
   res.end(json)
+}
+
+function sendRaw(req: IncomingMessage, res: ServerResponse, status: number, body: string, extra?: Record<string, string>) {
+  res.writeHead(status, {
+    ...corsHeaders(req),
+    'Content-Type': extra?.['Content-Type'] ?? 'application/json; charset=utf-8',
+    ...extra,
+  })
+  res.end(body)
+}
+
+/**
+ * Cursor Streamable HTTP sends `Accept: application/json, text/event-stream`.
+ * @ifc-lite/mcp HttpTransport upgrades any such POST to a hanging SSE stream,
+ * so initialize never completes and the UI stays on "Connecting" with no tools.
+ * Prefer JSON for request/response; SSE only on GET (notifications).
+ */
+function listenCursorMcpHttp(options: {
+  host: string
+  port: number
+  token: string
+  makeSession: (sessionId: string) => MCPServer
+}): Promise<void> {
+  const sessions = new Map<string, { server: MCPServer }>()
+  const http = createServer((req, res) => {
+    void (async () => {
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, corsHeaders(req))
+        res.end()
+        return
+      }
+      if (!isAuthorized(req, options.token)) {
+        send(req, res, 401, { error: 'unauthorized' })
+        return
+      }
+      const sessionId = typeof req.headers['mcp-session-id'] === 'string' ? req.headers['mcp-session-id'].trim() : ''
+
+      if (req.method === 'GET') {
+        const session = sessionId ? sessions.get(sessionId) : undefined
+        if (!session) {
+          res.writeHead(405, { ...corsHeaders(req), Allow: 'POST, DELETE, OPTIONS' })
+          res.end()
+          return
+        }
+        res.writeHead(200, {
+          ...corsHeaders(req),
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache, no-transform',
+          Connection: 'keep-alive',
+        })
+        res.write(': connected\n\n')
+        const ka = setInterval(() => {
+          if (!res.writableEnded) res.write(': keepalive\n\n')
+        }, 15_000)
+        req.on('close', () => clearInterval(ka))
+        return
+      }
+
+      if (req.method === 'DELETE') {
+        if (sessionId) {
+          const session = sessions.get(sessionId)
+          session?.server.detach()
+          sessions.delete(sessionId)
+        }
+        res.writeHead(204, corsHeaders(req))
+        res.end()
+        return
+      }
+
+      if (req.method !== 'POST') {
+        res.writeHead(405, { ...corsHeaders(req), Allow: 'GET, POST, DELETE, OPTIONS' })
+        res.end()
+        return
+      }
+
+      const raw = await readBody(req)
+      let message: { jsonrpc?: string; id?: unknown; method?: string; params?: unknown }
+      try {
+        message = JSON.parse(raw) as typeof message
+      } catch {
+        send(req, res, 400, { jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null })
+        return
+      }
+
+      let session = sessionId ? sessions.get(sessionId) : undefined
+      const issuedSessionId = !session && message.method === 'initialize' ? randomUUID() : ''
+      if (!session) {
+        if (message.method !== 'initialize' || !issuedSessionId) {
+          sendRaw(req, res, 400, 'Mcp-Session-Id required')
+          return
+        }
+        const server = options.makeSession(issuedSessionId)
+        server.attach({ send() {} })
+        session = { server }
+        sessions.set(issuedSessionId, session)
+      }
+
+      const response = await session.server.handleMessage(message)
+      res.writeHead(200, {
+        ...corsHeaders(req),
+        'Content-Type': 'application/json; charset=utf-8',
+        ...(issuedSessionId ? { 'Mcp-Session-Id': issuedSessionId } : {}),
+      })
+      res.end(response ? JSON.stringify(response) : '{}')
+    })().catch((caught) => {
+      log(`mcp http: ${caught instanceof Error ? caught.message : String(caught)}`)
+      if (!res.writableEnded) send(req, res, 500, { error: 'internal error' })
+    })
+  })
+
+  return new Promise((resolveListen, reject) => {
+    http.listen(options.port, options.host, () => resolveListen())
+    http.on('error', reject)
+  })
 }
 
 async function chatCompletions(body: {
@@ -403,7 +521,7 @@ async function main() {
           ready,
           loading,
           error,
-          mcp: `http://${host}:${port}`,
+          mcp: `http://${host}:${port}/mcp`,
           revision: runtime.revision,
         })
         return
@@ -472,6 +590,38 @@ async function main() {
   log(`sync http://${host}:${syncPort}`)
 
   try {
+    const mcpUrl = `http://${host}:${port}/mcp`
+    try {
+      await writeCursorMcpConfig(mcpUrl, token)
+      log(`wrote Cursor MCP config ${resolve('.mcp.json')} and ${resolve('.cursor/mcp.json')}`)
+    } catch (caught) {
+      log(`could not write .mcp.json: ${caught instanceof Error ? caught.message : String(caught)}`)
+    }
+
+    const registry = new InMemoryModelRegistry()
+    await listenCursorMcpHttp({
+      host,
+      port,
+      token,
+      makeSession: (sessionId) => makeServer(registry, runtime, sessionId),
+    })
+    log(`listening on ${mcpUrl}`)
+
+    bimServer = makeServer(registry, runtime, 'ifclite-app')
+    bimServer.attach({ send() {} })
+    await bimServer.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-11-05',
+        capabilities: {},
+        clientInfo: { name: 'ifclite-desktop', version: '0.1.0' },
+      },
+    })
+    await bimServer.handleMessage({ jsonrpc: '2.0', method: 'notifications/initialized' })
+    bimReady = true
+
     if (catalogPath && existsSync(catalogPath)) {
       runtime.setCatalog(await loadCatalog(catalogPath), catalogPath)
       log(`catalog ${runtime.catalogSummary?.assemblyCount ?? 0} assemblies`)
@@ -493,7 +643,6 @@ async function main() {
       if (parsed) runtime.quantities = parsed
     }
 
-    const registry = new InMemoryModelRegistry()
     if (ifcPath) {
       const model = await loadIfcModel(resolve(ifcPath))
       registry.add(model)
@@ -502,43 +651,9 @@ async function main() {
       log('started without --ifc; BIM query tools need a model')
     }
 
-    try {
-      await writeCursorMcpConfig(`http://${host}:${port}`, token)
-      log(`wrote Cursor MCP config ${resolve('.mcp.json')}`)
-    } catch (caught) {
-      log(`could not write .mcp.json: ${caught instanceof Error ? caught.message : String(caught)}`)
-    }
-
-    const transport = new HttpTransport({
-      port,
-      host,
-      authenticator: new BearerTokenAuth(new Map([[token, fullScope()]])),
-      sessionFactory: {
-        build(_scope, sessionId) {
-          return makeServer(registry, runtime, sessionId)
-        },
-      },
-    })
-    await transport.listen()
-    log(`listening on http://${host}:${port}`)
-
-    bimServer = makeServer(registry, runtime, 'ifclite-app')
-    bimServer.attach({ send() {} })
-    await bimServer.handleMessage({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'initialize',
-      params: {
-        protocolVersion: '2025-11-05',
-        capabilities: {},
-        clientInfo: { name: 'ifclite-desktop', version: '0.1.0' },
-      },
-    })
-    await bimServer.handleMessage({ jsonrpc: '2.0', method: 'notifications/initialized' })
-    bimReady = true
     ready = true
     loading = false
-    process.stdout.write(`MCP_READY http://${host}:${port}\n`)
+    process.stdout.write(`MCP_READY ${mcpUrl}\n`)
   } catch (caught) {
     loading = false
     error = caught instanceof Error ? caught.message : String(caught)

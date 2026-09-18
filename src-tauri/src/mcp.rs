@@ -307,7 +307,7 @@ pub fn start_mcp_host(
         port,
         sync_port,
         token,
-        url: format!("http://127.0.0.1:{port}"),
+        url: format!("http://127.0.0.1:{port}/mcp"),
         pid,
     })
 }
