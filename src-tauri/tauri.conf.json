@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "IFClite Desktop",
+  "productName": "VERBIM",
   "version": "0.1.0",
   "identifier": "dev.ifclite.desktop",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "IFClite Desktop",
+        "title": "VERBIM",
         "width": 1440,
         "height": 900,
         "minWidth": 1060,
