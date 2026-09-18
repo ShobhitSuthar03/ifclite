@@ -2,7 +2,7 @@ import { Calculator } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import type { ElementQuantity, FaceQuantity, QuantityResult } from '@/lib/geometry-qto'
-import { AREA_FIELDS, STANDARD_FIELDS } from '@/lib/geometry-qto'
+import { AREA_FIELDS, PERIMETER_FIELDS, STANDARD_FIELDS } from '@/lib/geometry-qto'
 import type { TakeoffProgress } from '@/lib/takeoff-scope'
 import { cn, formatCount } from '@/lib/utils'
 
@@ -21,10 +21,6 @@ type FormworkPanelProps = {
   onCancel: () => void
   onRecalculate: () => void
   onKeepPrevious: () => void
-}
-
-function formatVolume(value: number): string {
-  return `${value.toFixed(3)} m³`
 }
 
 function formatLength(value: number): string {
@@ -175,10 +171,10 @@ function AggregateCard({ rows, selectedCount }: { rows: ElementQuantity[]; selec
     UNDERAREA: 0,
     TOPAREA: 0,
     GROSSAREA: 0,
-    VOLUME: 0,
     LENGTH: 0,
-    WIDTH: 0,
     HEIGHT: 0,
+    FOOTPRINTPERIMETER: 0,
+    GIRTH: 0,
     COUNT: 0,
   }
   const byType = new Map<string, { count: number; lateral: number; gross: number }>()
@@ -187,10 +183,10 @@ function AggregateCard({ rows, selectedCount }: { rows: ElementQuantity[]; selec
     totals.UNDERAREA += element.metrics.UNDERAREA
     totals.TOPAREA += element.metrics.TOPAREA
     totals.GROSSAREA += element.metrics.GROSSAREA
-    totals.VOLUME += element.metrics.VOLUME
     totals.LENGTH += element.metrics.LENGTH
-    totals.WIDTH += element.metrics.WIDTH
     totals.HEIGHT += element.metrics.HEIGHT
+    totals.FOOTPRINTPERIMETER += element.metrics.FOOTPRINTPERIMETER
+    totals.GIRTH += element.metrics.GIRTH
     totals.COUNT += element.metrics.COUNT
     const row = byType.get(element.ifcType) ?? { count: 0, lateral: 0, gross: 0 }
     row.count += 1
@@ -208,14 +204,14 @@ function AggregateCard({ rows, selectedCount }: { rows: ElementQuantity[]; selec
         </header>
         <div className="px-3 py-1.5">
           <Row label="Count" value={formatCount(totals.COUNT)} />
-          <Row label="Volume" value={formatVolume(totals.VOLUME)} />
           <Row label="Length" value={formatLength(totals.LENGTH)} />
-          <Row label="Width" value={formatLength(totals.WIDTH)} />
           <Row label="Height" value={formatLength(totals.HEIGHT)} />
           <Row label="GROSSAREA" value={formatArea(totals.GROSSAREA)} />
           <Row label="LATERALAREA" value={formatArea(totals.LATERALAREA)} />
           <Row label="TOPAREA" value={formatArea(totals.TOPAREA)} />
           <Row label="UNDERAREA" value={formatArea(totals.UNDERAREA)} />
+          <Row label="FOOTPRINTPERIMETER" value={formatLength(totals.FOOTPRINTPERIMETER)} />
+          <Row label="GIRTH" value={formatLength(totals.GIRTH)} />
         </div>
       </section>
       {byType.size > 0 ? (
@@ -274,6 +270,14 @@ function SelectedElement({
             key={field.key}
             label={field.label}
             value={formatArea(element.metrics[field.key])}
+            hint={field.hint}
+          />
+        ))}
+        {PERIMETER_FIELDS.map((field) => (
+          <Row
+            key={field.key}
+            label={field.label}
+            value={formatLength(element.metrics[field.key])}
             hint={field.hint}
           />
         ))}

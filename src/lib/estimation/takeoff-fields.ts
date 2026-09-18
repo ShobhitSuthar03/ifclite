@@ -1,6 +1,6 @@
-import type { AreaMetrics } from '@/lib/geometry-qto'
+import type { AreaMetricKey } from '@/lib/geometry-qto'
 
-export const TAKEOFF_QTY_FIELDS: Array<{ field: keyof AreaMetrics; label: string; unit: string }> = [
+export const TAKEOFF_QTY_FIELDS: Array<{ field: AreaMetricKey; label: string; unit: string }> = [
   { field: 'VOLUME', label: 'Volume', unit: 'm³' },
   { field: 'LATERALAREA', label: 'Lateral area', unit: 'm²' },
   { field: 'GROSSAREA', label: 'Gross area', unit: 'm²' },
@@ -17,10 +17,10 @@ export const TAKEOFF_QTY_FIELDS: Array<{ field: keyof AreaMetrics; label: string
 
 const TAKEOFF_FIELD_SET = new Set(TAKEOFF_QTY_FIELDS.map((item) => item.field))
 
-export function isTakeoffField(value: string): value is keyof AreaMetrics {
-  return TAKEOFF_FIELD_SET.has(value as keyof AreaMetrics)
+export function isTakeoffField(value: string): value is AreaMetricKey {
+  return TAKEOFF_FIELD_SET.has(value as AreaMetricKey)
 }
 
-export function takeoffFieldMeta(field: keyof AreaMetrics): { field: keyof AreaMetrics; label: string; unit: string } {
+export function takeoffFieldMeta(field: AreaMetricKey): { field: AreaMetricKey; label: string; unit: string } {
   return TAKEOFF_QTY_FIELDS.find((item) => item.field === field) ?? { field, label: String(field), unit: '' }
 }

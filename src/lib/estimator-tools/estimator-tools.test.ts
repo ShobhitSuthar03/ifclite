@@ -56,6 +56,8 @@ function emptyMetrics() {
     LENGTH: 0,
     WIDTH: 0,
     HEIGHT: 0,
+    FOOTPRINTPERIMETER: 0,
+    GIRTH: 0,
     COUNT: 1,
   }
 }
@@ -95,6 +97,8 @@ function quantities(): QuantityResult {
       LENGTH: 0,
       WIDTH: 0,
       HEIGHT: 0,
+      FOOTPRINTPERIMETER: 0,
+      GIRTH: 0,
       COUNT: 2,
     },
     grossArea: 14,

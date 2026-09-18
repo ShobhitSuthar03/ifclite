@@ -7,6 +7,7 @@ import {
   emptyAabb,
   expandAabb,
   normalize,
+  obbVolume,
   scale,
   sub,
   triangleArea,
@@ -63,6 +64,70 @@ function areaCentroid(tris: RawTri[]): Vec3 {
 
 function flipTriangles(triangles: [Vec3, Vec3, Vec3][]): [Vec3, Vec3, Vec3][] {
   return triangles.map(([a, b, c]) => [a, c, b])
+}
+
+function signedTetraSum(meshes: QtoMesh[]): number {
+  let acc = 0
+  for (const mesh of meshes) {
+    const origin = originOf(mesh)
+    const { positions, indices } = mesh
+    const count = Math.floor(indices.length / 3)
+    for (let t = 0; t < count; t += 1) {
+      const a = readVertex(positions, indices[t * 3], origin)
+      const b = readVertex(positions, indices[t * 3 + 1], origin)
+      const c = readVertex(positions, indices[t * 3 + 2], origin)
+      acc +=
+        a.x * (b.y * c.z - b.z * c.y) +
+        a.y * (b.z * c.x - b.x * c.z) +
+        a.z * (b.x * c.y - b.y * c.x)
+    }
+  }
+  return acc
+}
+
+/**
+ * Net enclosed volume from tessellator winding. Face grouping later flips
+ * triangles so overlays point away from the mesh centroid; that inversion
+ * treats cavity/opening walls as extra solid and inflates VOLUME.
+ */
+export function enclosedVolumeOfMeshes(meshes: QtoMesh[]): number {
+  return Math.abs(signedTetraSum(meshes)) / 6
+}
+
+function meshVertices(meshes: QtoMesh[]): Vec3[] {
+  const points: Vec3[] = []
+  for (const mesh of meshes) {
+    const origin = originOf(mesh)
+    const { positions } = mesh
+    const count = Math.floor(positions.length / 3)
+    for (let i = 0; i < count; i += 1) points.push(readVertex(positions, i, origin))
+  }
+  return points
+}
+
+// A tessellator can emit a technically-closed-but-degenerate shell (e.g. one
+// end re-triangulated twice with crossing diagonals, forming a flat "double
+// cover" instead of a single quad) where the winding of that degenerate patch
+// is ill-defined and the divergence-theorem sum comes out wildly wrong, while
+// still passing as a valid closed 2-manifold. VOLUME can never legitimately
+// exceed the element's own oriented bounding box, and rarely drops below a
+// small fraction of it (even a hollow/open profile keeps some meaningful
+// fill), so a wide breach of that band is a reliable tell without needing to
+// detect the malformed triangulation itself.
+const MIN_OBB_FILL_RATIO = 0.05
+const MAX_OBB_OVERSHOOT = 1.01
+
+export type ElementVolume = { volume: number; source: 'mesh' | 'obb' }
+
+/** Mesh volume, falling back to an oriented-bounding-box estimate when the
+ * tessellated shell looks too broken to trust (see MIN_OBB_FILL_RATIO). */
+export function elementVolume(meshes: QtoMesh[]): ElementVolume {
+  const meshVol = enclosedVolumeOfMeshes(meshes)
+  const obbVol = obbVolume(meshVertices(meshes))
+  if (obbVol > 1e-9 && (meshVol > obbVol * MAX_OBB_OVERSHOOT || meshVol < obbVol * MIN_OBB_FILL_RATIO)) {
+    return { volume: obbVol, source: 'obb' }
+  }
+  return { volume: meshVol, source: 'mesh' }
 }
 
 function meshTriangles(mesh: QtoMesh): RawTri[] {

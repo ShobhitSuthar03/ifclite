@@ -409,6 +409,8 @@ function emptyElement(expressId: number, volume: number, area: number) {
       LENGTH: 1,
       WIDTH: 1,
       HEIGHT: 1,
+      FOOTPRINTPERIMETER: 4,
+      GIRTH: 4,
       COUNT: 1,
     },
     grossArea: area,
@@ -429,6 +431,8 @@ function emptyTotals() {
     LENGTH: 0,
     WIDTH: 0,
     HEIGHT: 0,
+    FOOTPRINTPERIMETER: 0,
+    GIRTH: 0,
     COUNT: 0,
   }
 }

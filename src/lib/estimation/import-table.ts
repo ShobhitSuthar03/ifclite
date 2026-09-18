@@ -3,7 +3,7 @@ import type { CostAssembly } from '@/lib/cost-assembly/types'
 import { TAKEOFF_QTY_FIELDS } from '@/lib/estimation/qty-bind'
 import { emptyBoq, newBoqId, type BoqDoc, type BoqKind, type BoqNode } from '@/lib/estimation/types'
 import { parseMatchPropertyText } from '@/lib/estimation/bind'
-import type { AreaMetrics } from '@/lib/geometry-qto'
+import type { AreaMetricKey } from '@/lib/geometry-qto'
 
 export const BOQ_IMPORT_MAX_BYTES = 20 * 1024 * 1024
 
@@ -31,7 +31,7 @@ export type BoqImportResult = {
   matchedAssemblies: number
 }
 
-const QTO_FIELDS: Record<string, keyof AreaMetrics> = {
+const QTO_FIELDS: Record<string, AreaMetricKey> = {
   numberofitems: 'COUNT',
   count: 'COUNT',
   pcs: 'COUNT',
@@ -52,7 +52,7 @@ const QTO_FIELDS: Record<string, keyof AreaMetrics> = {
   height: 'HEIGHT',
 }
 
-export function mapQtoType(type: string, uom = ''): keyof AreaMetrics | null {
+export function mapQtoType(type: string, uom = ''): AreaMetricKey | null {
   const key = type.trim().toLowerCase().replace(/[\s_-]+/g, '')
   if (key && QTO_FIELDS[key]) return QTO_FIELDS[key]
   const unit = uom.trim().toLowerCase().replace(/³/g, '3').replace(/²/g, '2')
@@ -198,7 +198,7 @@ export function assertImportSize(bytes: Uint8Array, fileName: string) {
   }
 }
 
-export function takeoffFieldKnown(field: string): field is keyof AreaMetrics {
+export function takeoffFieldKnown(field: string): field is AreaMetricKey {
   return TAKEOFF_QTY_FIELDS.some((item) => item.field === field)
 }
 

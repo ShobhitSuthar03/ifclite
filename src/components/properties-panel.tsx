@@ -3,7 +3,7 @@ import { Check, ChevronDown, Pencil, Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import type { EntityData } from '@/lib/ifc-data'
-import { AREA_FIELDS, STANDARD_FIELDS, type AreaMetrics } from '@/lib/geometry-qto'
+import { AREA_FIELDS, PERIMETER_FIELDS, STANDARD_FIELDS, type AreaMetrics } from '@/lib/geometry-qto'
 import { commonProperties, selectionTypeLabel, type CommonPropertyRow } from '@/lib/common-properties'
 import { cn, formatCount } from '@/lib/utils'
 
@@ -182,6 +182,15 @@ export function PropertiesPanel({
                     key={field.key}
                     label={field.label}
                     value={`${computedMetrics[field.key].toFixed(3)} m²`}
+                  />
+                ))}
+              </PsetGroup>
+              <PsetGroup name="Computed perimeters (geometry)" defaultOpen>
+                {PERIMETER_FIELDS.map((field) => (
+                  <Row
+                    key={field.key}
+                    label={field.label}
+                    value={`${computedMetrics[field.key].toFixed(3)} m`}
                   />
                 ))}
               </PsetGroup>

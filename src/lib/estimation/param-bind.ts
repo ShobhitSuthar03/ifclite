@@ -1,6 +1,6 @@
 import type { PropertyCatalogSet } from '@/lib/bim-sql'
 import type { AssemblyParameter } from '@/lib/cost-assembly/types'
-import type { AreaMetrics } from '@/lib/geometry-qto'
+import type { AreaMetricKey } from '@/lib/geometry-qto'
 import { propertyRefKey, type PropertyRef } from '@/lib/property-tree'
 import { isTakeoffField, TAKEOFF_QTY_FIELDS } from '@/lib/estimation/takeoff-fields'
 
@@ -18,7 +18,7 @@ export type ParamCombine = 'sum' | 'average'
 
 export type ParamBinding =
   | { mode: 'manual' }
-  | { mode: 'takeoff'; field: keyof AreaMetrics; combine: ParamCombine }
+  | { mode: 'takeoff'; field: AreaMetricKey; combine: ParamCombine }
   | { mode: 'ifc'; property: PropertyRef; combine: ParamCombine }
 
 export function paramBindingKey(assemblyId: string, code: string): string {
@@ -101,7 +101,7 @@ export function paramSourceValue(binding: ParamBinding): string {
   return `ifc:${propertyRefKey(binding.property)}`
 }
 
-export function parseParamSourceValue(value: string): { mode: 'manual' } | { mode: 'takeoff'; field: keyof AreaMetrics } | { mode: 'ifc'; property: PropertyRef } | null {
+export function parseParamSourceValue(value: string): { mode: 'manual' } | { mode: 'takeoff'; field: AreaMetricKey } | { mode: 'ifc'; property: PropertyRef } | null {
   if (value === 'manual') return { mode: 'manual' }
   if (value.startsWith('takeoff:')) {
     const field = value.slice('takeoff:'.length)
@@ -129,7 +129,7 @@ function parsePropertyKeySuffix(value: string): PropertyRef | null {
 }
 
 export function withCombine(
-  source: { mode: 'manual' } | { mode: 'takeoff'; field: keyof AreaMetrics } | { mode: 'ifc'; property: PropertyRef },
+  source: { mode: 'manual' } | { mode: 'takeoff'; field: AreaMetricKey } | { mode: 'ifc'; property: PropertyRef },
   combine: ParamCombine,
 ): ParamBinding {
   if (source.mode === 'manual') return source
@@ -141,7 +141,7 @@ export function withCombine(
 export function measuredParamValue(
   binding: ParamBinding,
   ids: number[],
-  measureTakeoffFn: (ids: number[], field: keyof AreaMetrics) => number,
+  measureTakeoffFn: (ids: number[], field: AreaMetricKey) => number,
   measureIfcFn?: (ids: number[], property: PropertyRef) => number,
 ): number | null {
   if (binding.mode === 'manual') return null
@@ -157,7 +157,7 @@ export function buildMeasuredParams(
   bindings: Record<string, ParamBinding>,
   assemblyId: string,
   ids: number[],
-  measureTakeoffFn: (ids: number[], field: keyof AreaMetrics) => number,
+  measureTakeoffFn: (ids: number[], field: AreaMetricKey) => number,
   measureIfcFn?: (ids: number[], property: PropertyRef) => number,
   catalog: PropertyCatalogSet[] = [],
 ): Map<string, number> {

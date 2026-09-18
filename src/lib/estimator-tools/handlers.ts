@@ -22,7 +22,7 @@ import { classifyAssemblies, classifyFromHints } from '@/lib/estimator-tools/cla
 import type { EstimatorRuntime } from '@/lib/estimator-tools/runtime'
 import { classifySkip } from '@/lib/estimator-tools/skip'
 import { TAKEOFF_QTY_FIELDS, measureTakeoff } from '@/lib/estimation/qty-bind'
-import type { AreaMetrics } from '@/lib/geometry-qto'
+import type { AreaMetricKey } from '@/lib/geometry-qto'
 import {
   asBool,
   parsePropertySearch,
@@ -281,7 +281,7 @@ async function qtoForIds(input: Record<string, unknown>, runtime: EstimatorRunti
     ? input.fields.filter((item): item is string => typeof item === 'string')
     : ['VOLUME', 'LATERALAREA', 'GROSSAREA', 'LENGTH', 'COUNT']
   const allowed = new Set(TAKEOFF_QTY_FIELDS.map((item) => item.field))
-  const fields = requested.filter((field): field is keyof AreaMetrics => allowed.has(field as keyof AreaMetrics))
+  const fields = requested.filter((field): field is AreaMetricKey => allowed.has(field as AreaMetricKey))
   const metrics: Record<string, number> = {}
   for (const field of fields) {
     metrics[field] = measureTakeoff(ids, field, runtime.quantities)
@@ -293,10 +293,13 @@ async function qtoForIds(input: Record<string, unknown>, runtime: EstimatorRunti
     stillMissing.length === 0 &&
     (metrics.VOLUME === 0 || metrics.VOLUME == null) &&
     (metrics.LATERALAREA === 0 || metrics.LATERALAREA == null)
+  const summary = Object.entries(metrics)
+    .map(([key, value]) => `${key}=${Number(value).toFixed(3)}`)
+    .join(' ')
   return ok(
     stillMissing.length
       ? `Takeoff queued for ${stillMissing.length} id(s) in the desktop viewer. Call qto_for_ids again after a few seconds.`
-      : `Takeoff for ${ids.length} id${ids.length === 1 ? '' : 's'}.`,
+      : `Takeoff for ${ids.length} id${ids.length === 1 ? '' : 's'}. ${summary}`,
     {
       ids,
       metrics,

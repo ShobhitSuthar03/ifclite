@@ -4,7 +4,7 @@ import type { CostAssembly, CostKind } from '@/lib/cost-assembly/types'
 import { ancestorMultipliers, evaluatedRowQty } from '@/lib/cost-assembly/evaluate'
 import type { FormulaResolver } from '@/lib/cost-assembly/formula'
 import { makeParameterResolver } from '@/lib/cost-assembly/params'
-import type { AreaMetrics, QuantityResult } from '@/lib/geometry-qto'
+import type { AreaMetricKey, QuantityResult } from '@/lib/geometry-qto'
 import { buildMeasuredParams, type ParamBinding } from '@/lib/estimation/param-bind'
 import { quantityForIds } from '@/lib/estimation/qty'
 import { isTakeoffField, takeoffFieldMeta, TAKEOFF_QTY_FIELDS } from '@/lib/estimation/takeoff-fields'
@@ -15,7 +15,7 @@ export { TAKEOFF_QTY_FIELDS, isTakeoffField, takeoffFieldMeta }
 export type QtyBinding =
   | { mode: 'catalog' }
   | { mode: 'assembly' }
-  | { mode: 'takeoff'; field: keyof AreaMetrics }
+  | { mode: 'takeoff'; field: AreaMetricKey }
   | { mode: 'ifc'; property: PropertyRef }
 
 export function qtyBindingKey(assemblyId: string, rowId: string): string {
@@ -98,7 +98,7 @@ export function parseQtySourceValue(value: string): QtyBinding | null {
 
 export function measureTakeoff(
   ids: number[],
-  field: keyof AreaMetrics,
+  field: AreaMetricKey,
   quantities: QuantityResult | null,
 ): number {
   if (ids.length === 0) return 0
@@ -155,7 +155,7 @@ export type ElementBuildUpLine = {
   qty: number
   unit: string
   amount: number
-  takeoffField: keyof AreaMetrics | null
+  takeoffField: AreaMetricKey | null
 }
 
 export type ElementBuildUp = {

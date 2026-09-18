@@ -1,5 +1,5 @@
 import { extractFaces } from '@/lib/geometry-qto/faces'
-import { boxMesh } from '@/lib/geometry-qto/box-mesh'
+import { boxMesh, boxMeshWithOpening } from '@/lib/geometry-qto/box-mesh'
 import { computeColumnFormwork, computeElementQuantities, hydrateFacePositions } from '@/lib/geometry-qto/formwork'
 import { isBuildingElementType } from '@/lib/geometry-qto/faces'
 import { meshesForQuantityJob, typeQtoMeshes } from '@/lib/geometry-qto/job'
@@ -77,6 +77,14 @@ describe('computeElementQuantities', () => {
     expect(result.elements[0].faces.some((face) => face.positions.length > 0)).toBe(true)
   })
 
+  it('computes footprint perimeter and girth for a straight column', () => {
+    const column = boxMesh(10, 'IfcColumn', [0, 0, 0], [0.4, 3, 0.4])
+    const result = computeElementQuantities([column])
+    const metrics = result.elements[0].metrics
+    almost(metrics.FOOTPRINTPERIMETER, 2 * (0.4 + 0.4))
+    almost(metrics.GIRTH, 2 * (0.4 + 0.4))
+  })
+
   it('typeQtoMeshes fills missing IFC class names from a lookup', () => {
     const column = boxMesh(10, 'IfcColumn', [0, 0, 0], [0.4, 3, 0.4])
     const { ifcType: _ifcType, ...untyped } = column
@@ -138,6 +146,38 @@ describe('computeElementQuantities', () => {
     const result = computeElementQuantities([slab, wall])
     const slabEl = result.elements.find((item) => item.expressId === 1)!
     for (const face of slabEl.faces) almost(face.overlapArea, 0)
+  })
+
+  it('deducts a through-opening from slab volume and top/under area', () => {
+    const slab = boxMeshWithOpening(2, 'IfcSlab', [0, 0, 0], [4, 0.2, 5], [1.5, 0, 2], [2.5, 0.2, 3])
+    const result = computeElementQuantities([slab])
+    const m = result.elements[0].metrics
+    almost(m.VOLUME, 4 * 0.2 * 5 - 1 * 0.2 * 1)
+    almost(m.TOPAREA, 4 * 5 - 1)
+    almost(m.UNDERAREA, 4 * 5 - 1)
+    almost(m.FOOTPRINTAREA, 4 * 5 - 1)
+  })
+
+  it('does not inflate volume when cavity walls would be flipped away from the centroid', () => {
+    const outer = boxMesh(10, 'IfcColumn', [0, 0, 0], [0.4, 3, 0.4])
+    const cavity = boxMesh(10, 'IfcColumn', [0.1, 0, 0.1], [0.3, 3, 0.3])
+    const indices = Uint32Array.from(cavity.indices)
+    for (let i = 0; i + 2 < indices.length; i += 3) {
+      const swap = indices[i + 1]
+      indices[i + 1] = indices[i + 2]
+      indices[i + 2] = swap
+    }
+    const hollow = {
+      expressId: 10,
+      ifcType: 'IfcColumn',
+      positions: new Float32Array([...outer.positions, ...cavity.positions]),
+      indices: new Uint32Array([
+        ...outer.indices,
+        ...Uint32Array.from(indices).map((index) => index + outer.positions.length / 3),
+      ]),
+    }
+    const result = computeElementQuantities([hollow])
+    almost(result.elements[0].metrics.VOLUME, 0.4 * 3 * 0.4 - 0.2 * 3 * 0.2)
   })
 
   it('applies mesh origin when assembling world-space faces', () => {

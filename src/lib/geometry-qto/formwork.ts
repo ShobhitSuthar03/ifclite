@@ -1,4 +1,4 @@
-import { extractFaces, isBuildingElementType, isColumnType } from '@/lib/geometry-qto/faces'
+import { elementVolume, extractFaces, isBuildingElementType, isColumnType } from '@/lib/geometry-qto/faces'
 import type {
   AreaMetrics,
   ElementQuantity,
@@ -7,8 +7,10 @@ import type {
   PlanarFace,
   QuantityResult,
   QtoMesh,
+  Vec3,
 } from '@/lib/geometry-qto/types'
 import { DEFAULT_HORIZONTAL_DOT, VIEWER_UP } from '@/lib/geometry-qto/types'
+import { obbGirth, orientedPlanePerimeter } from '@/lib/geometry-qto/vec'
 
 function flattenTriangles(triangles: PlanarFace['triangles']): number[] {
   const positions: number[] = []
@@ -45,6 +47,14 @@ function envelopeProjections(faces: PlanarFace[]): { x: number; y: number; z: nu
   return { x: x * 0.5, y: y * 0.5, z: z * 0.5 }
 }
 
+function allPoints(faces: PlanarFace[]): Vec3[] {
+  const points: Vec3[] = []
+  for (const face of faces) {
+    for (const [a, b, c] of face.triangles) points.push(a, b, c)
+  }
+  return points
+}
+
 function aabbOf(faces: PlanarFace[]) {
   let minX = Infinity
   let minY = Infinity
@@ -63,22 +73,14 @@ function aabbOf(faces: PlanarFace[]) {
   return { dx: Math.max(0, maxX - minX), dy: Math.max(0, maxY - minY), dz: Math.max(0, maxZ - minZ) }
 }
 
-function enclosedVolume(faces: PlanarFace[]): number {
-  let acc = 0
-  for (const face of faces) {
-    for (const [a, b, c] of face.triangles) {
-      acc +=
-        a.x * (b.y * c.z - b.z * c.y) +
-        a.y * (b.z * c.x - b.x * c.z) +
-        a.z * (b.x * c.y - b.y * c.x)
-    }
-  }
-  return Math.abs(acc) / 6
-}
-
-function metricsFromFaces(faces: PlanarFace[], quantities: FaceQuantity[]): AreaMetrics {
+function metricsFromFaces(
+  faces: PlanarFace[],
+  quantities: FaceQuantity[],
+  volume: { volume: number; source: 'mesh' | 'obb' },
+): AreaMetrics {
   const proj = envelopeProjections(faces)
   const extents = aabbOf(faces)
+  const points = allPoints(faces)
   const axes: Array<{ size: number; area: number }> = [
     { size: extents.dx, area: proj.x },
     { size: extents.dy, area: proj.y },
@@ -108,10 +110,13 @@ function metricsFromFaces(faces: PlanarFace[], quantities: FaceQuantity[]): Area
     UNCOVEREDAREA: gross,
     CROSSAREA: longest.area,
     FOOTPRINTAREA: proj.y,
-    VOLUME: enclosedVolume(faces),
+    VOLUME: volume.volume,
+    VOLUME_SOURCE: volume.source,
     LENGTH: horiz[0] ?? 0,
     WIDTH: horiz[1] ?? 0,
     HEIGHT: extents.dy,
+    FOOTPRINTPERIMETER: orientedPlanePerimeter(points, VIEWER_UP),
+    GIRTH: obbGirth(points),
     COUNT: 1,
   }
 }
@@ -127,6 +132,8 @@ function addTotals(totals: QuantityResult['totals'], element: ElementQuantity) {
   totals.LENGTH += element.metrics.LENGTH
   totals.WIDTH += element.metrics.WIDTH
   totals.HEIGHT += element.metrics.HEIGHT
+  totals.FOOTPRINTPERIMETER += element.metrics.FOOTPRINTPERIMETER
+  totals.GIRTH += element.metrics.GIRTH
   totals.COUNT += element.metrics.COUNT
 }
 
@@ -142,6 +149,8 @@ function emptyTotals(): QuantityResult['totals'] {
     LENGTH: 0,
     WIDTH: 0,
     HEIGHT: 0,
+    FOOTPRINTPERIMETER: 0,
+    GIRTH: 0,
     COUNT: 0,
   }
 }
@@ -154,6 +163,13 @@ export function computeElementQuantities(meshes: QtoMesh[], options?: FormworkOp
     horizontalDot: options?.horizontalDot ?? DEFAULT_HORIZONTAL_DOT,
   })
   const grouped = new Map<number, PlanarFace[]>()
+  const meshesById = new Map<number, QtoMesh[]>()
+  for (const mesh of meshes) {
+    if (targetIds && !targetIds.has(mesh.expressId)) continue
+    const list = meshesById.get(mesh.expressId) ?? []
+    list.push(mesh)
+    meshesById.set(mesh.expressId, list)
+  }
   for (const face of allFaces) {
     if (!isBuildingElementType(face.ifcType)) continue
     if (targetIds && !targetIds.has(face.expressId)) continue
@@ -169,7 +185,7 @@ export function computeElementQuantities(meshes: QtoMesh[], options?: FormworkOp
         ? keepPositionsFor.has(expressId)
         : (options?.keepPositions ?? !targetIds)
       const quantities = faces.map((face) => toQuantity(face, keepPositions))
-      const metrics = metricsFromFaces(faces, quantities)
+      const metrics = metricsFromFaces(faces, quantities, elementVolume(meshesById.get(expressId) ?? []))
       return {
         expressId,
         ifcType: faces[0]?.ifcType || 'IfcBuildingElement',

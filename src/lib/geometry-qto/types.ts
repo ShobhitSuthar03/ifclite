@@ -40,14 +40,26 @@ export type AreaMetrics = {
   CROSSAREA: number
   FOOTPRINTAREA: number
   VOLUME: number
+  /** 'obb' when the tessellated shell looked too broken to trust and VOLUME
+   * fell back to an oriented-bounding-box estimate; see elementVolume(). */
+  VOLUME_SOURCE?: 'mesh' | 'obb'
   LENGTH: number
   WIDTH: number
   HEIGHT: number
+  /** Boundary length of the oriented (PCA) footprint rectangle - a diagonal
+   * element gets its own tight plan perimeter, not the world-axis-aligned one. */
+  FOOTPRINTPERIMETER: number
+  /** Perimeter of the cross-section perpendicular to the element's own long
+   * axis. Painting/wrapping coverage = GIRTH × LENGTH. */
+  GIRTH: number
   COUNT: number
 }
 
+/** Numeric, summable AreaMetrics fields - i.e. every field except VOLUME_SOURCE. */
+export type AreaMetricKey = Exclude<keyof AreaMetrics, 'VOLUME_SOURCE'>
+
 export const AREA_FIELDS: Array<{
-  key: keyof AreaMetrics
+  key: AreaMetricKey
   aliases?: string[]
   label: string
   hint: string
@@ -95,17 +107,38 @@ export const AREA_FIELDS: Array<{
   },
 ]
 
+// VOLUME/WIDTH are still computed (elementVolume(), etc.) and stay available
+// for cost-assembly/BOQ-import takeoff binding via TAKEOFF_QTY_FIELDS -
+// they're just not shown here, since most source models already carry their
+// own (usually more trustworthy) base-quantities pset for these, and this
+// module's own versions are geometry-derived approximations (world-axis AABB
+// for L/W/H; divergence-theorem/OBB-fallback for volume).
 export const STANDARD_FIELDS: Array<{
-  key: keyof AreaMetrics
+  key: AreaMetricKey
   label: string
   hint: string
   unit: string
 }> = [
   { key: 'COUNT', label: 'Count', hint: 'Number of elements in this takeoff.', unit: '' },
-  { key: 'VOLUME', label: 'Volume', hint: 'Enclosed mesh volume (absolute tetrahedral sum).', unit: 'm³' },
   { key: 'LENGTH', label: 'Length', hint: 'Largest horizontal AABB extent.', unit: 'm' },
-  { key: 'WIDTH', label: 'Width', hint: 'Smaller horizontal AABB extent.', unit: 'm' },
   { key: 'HEIGHT', label: 'Height', hint: 'Vertical AABB extent (viewer Y-up).', unit: 'm' },
+]
+
+export const PERIMETER_FIELDS: Array<{
+  key: AreaMetricKey
+  label: string
+  hint: string
+}> = [
+  {
+    key: 'FOOTPRINTPERIMETER',
+    label: 'FOOTPRINTPERIMETER',
+    hint: 'Boundary length of the oriented plan footprint (edge trim, coping, slab/footing perimeter).',
+  },
+  {
+    key: 'GIRTH',
+    label: 'GIRTH',
+    hint: 'Perimeter of the cross-section perpendicular to the long axis. Coverage = GIRTH × LENGTH (painting, fireproofing, wrapping).',
+  },
 ]
 
 export type FaceQuantity = {
@@ -153,6 +186,8 @@ export type QuantityResult = {
     | 'LENGTH'
     | 'WIDTH'
     | 'HEIGHT'
+    | 'FOOTPRINTPERIMETER'
+    | 'GIRTH'
     | 'COUNT'
   >
   grossArea: number
