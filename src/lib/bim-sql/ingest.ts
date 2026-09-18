@@ -11,6 +11,7 @@ import { CATEGORY_UNIT_RATES, CONCRETE_DENSITY_KG_M3, TARGET_COST_FACTOR } from 
 import { all, run } from '@/lib/bim-sql/database'
 import type { ElementRecord } from '@/lib/bim-sql/types'
 import type { QuantityResult } from '@/lib/geometry-qto'
+import { FederationRegistry } from '@/lib/federation'
 
 const SKIP_TYPE =
   /^(IfcRel|IfcProperty|IfcQuantity|IfcMaterial|IfcOwner|IfcPerson|IfcOrganization|IfcApplication|IfcCartesian|IfcDirection|IfcAxis|IfcLocalPlacement|IfcObjectPlacement|IfcGridPlacement|IfcShape|IfcFace|IfcPoly|IfcColour|IfcPresentation|IfcGeometric|IfcSIUnit|IfcUnitAssignment|IfcConversion|IfcMeasure|IfcDimensional|IfcProject$|IfcSite$|IfcBuilding$|IfcBuildingStorey|IfcProductDefinitionShape|IfcStyled|IfcSurfaceStyle|IfcColourRgb|IfcIndexed|IfcTriangulated|IfcTessellated|IfcBoolean|IfcExtruded|IfcRevolved|IfcSwept|IfcMappedItem|IfcRepresentation|IfcProfile|IfcClosedShell|IfcOpenShell|IfcConnectedFace|IfcAdvancedBrep|IfcVertex|IfcEdge|IfcLoop|IfcSolid|IfcCsg|IfcHalfSpace|IfcBoxedHalf|IfcSectioned|IfcArbitrary|IfcCompositeCurve|IfcTrimmed|IfcBSpline|IfcCircle$|IfcCircleProfile|IfcLine$|IfcPlane$|IfcPoint|IfcVector|IfcFillArea|IfcTexture|IfcImage|IfcBlob|IfcPixel|IfcCurveStyle|IfcDraughting|IfcTopology)/i
@@ -312,18 +313,52 @@ export function insertElementRecords(db: Database, modelId: number, records: Ele
   }
 }
 
+/**
+ * Loads one IFC file's worth of elements into the warehouse.
+ *
+ * `registry` globalizes each element's expressId before it's written, so a
+ * second (or third...) model loaded into the same registry never collides
+ * with the first on `elements.express_id`'s UNIQUE constraint - two files
+ * can freely reuse the same raw STEP entity numbers. Callers that only ever
+ * load one file per session (all current callers) can omit it entirely: a
+ * fresh registry always assigns the first model offset 0, so the ids
+ * written are numerically identical to today's raw expressIds.
+ *
+ * Passing the SAME registry instance across multiple ingestWarehouse calls
+ * (one per loaded file) is what actually federates them.
+ *
+ * `modelKey` is the registry's own identity for this file (e.g. the same key
+ * a geometry loader already registered it under) - pass it when some other
+ * part of the session registered this model first, so both sides resolve to
+ * the SAME offset instead of computing two different ones for one file.
+ * Defaults to this function's own SQL model id, matching every caller that
+ * only ever ingests via this function.
+ */
 export function ingestWarehouse(
   db: Database,
   store: IfcDataStore,
   spatialRoot: SpatialTreeNode | null,
   fileName: string,
   versionId: string,
+  registry: FederationRegistry = new FederationRegistry(),
+  modelKey?: string,
 ) {
   const modelId = startWarehouseIngest(db, spatialRoot, fileName, versionId)
-  insertElementRecords(db, modelId, collectElementRecords(store))
+  const records = collectElementRecords(store)
+  const maxExpressId = records.reduce((max, row) => Math.max(max, row.expressId), 0)
+  const key = modelKey ?? String(modelId)
+  registry.ensureModel(key, fileName, maxExpressId)
+  const globalized = records.map((row) => ({ ...row, expressId: registry.toGlobalId(key, row.expressId) }))
+  insertElementRecords(db, modelId, globalized)
   return modelId
 }
 
+// NOTE: matches by raw `element.expressId`, which only equals the warehouse's
+// globalized `express_id` while every loaded model's registry offset is 0
+// (true today - only one file is ever ingested per session). Once App.tsx
+// wires up a shared, persistent FederationRegistry across multiple loaded
+// files, this needs the same registry + modelId to globalize `expressId`
+// before the WHERE lookup, same as ingestWarehouse() above.
 export function applyGeometryQuantities(db: Database, result: QuantityResult) {
   const stmt = db.prepare(
     `UPDATE elements

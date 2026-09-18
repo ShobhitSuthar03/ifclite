@@ -1,6 +1,27 @@
 import type { MeshData } from '@ifc-lite/geometry'
 import { meshWorldAabb, meshesForQuantityIndex, type IndexedQtoMesh } from '@/lib/geometry-qto/job'
 import type { QtoMesh } from '@/lib/geometry-qto/types'
+import type { FederationRegistry } from '@/lib/federation'
+
+/**
+ * Re-homes every id on a mesh that shares expressId's id space onto a
+ * model's assigned global range, in place. Mirrors the engine's own design
+ * (`@ifc-lite/geometry`'s MeshData.materialId doc comment names this exact
+ * function): `geometryItemId`, `materialId`, and `textureRef.textureId` are
+ * all local IFC entity references within the same file as expressId, so a
+ * federated session must shift them together or they end up pointing at the
+ * wrong (or a nonexistent) entity once the offset is applied. `origin`
+ * (a float precision translation) and `modelIndex` are untouched - they
+ * aren't identifiers.
+ */
+export function applyFederationOffsetToMesh(mesh: MeshData, registry: FederationRegistry, modelId: string): void {
+  mesh.expressId = registry.toGlobalId(modelId, mesh.expressId)
+  if (mesh.geometryItemId != null) mesh.geometryItemId = registry.toGlobalId(modelId, mesh.geometryItemId)
+  if (mesh.materialId != null) mesh.materialId = registry.toGlobalId(modelId, mesh.materialId)
+  if (mesh.textureRef) {
+    mesh.textureRef = { ...mesh.textureRef, textureId: registry.toGlobalId(modelId, mesh.textureRef.textureId) }
+  }
+}
 
 /**
  * CPU mesh list for the viewer and on-demand QTO. Kept outside React state so a
@@ -19,7 +40,13 @@ export type ViewerMeshStore = {
   subscribe(listener: () => void): () => void
 }
 
-export function createViewerMeshStore(): ViewerMeshStore {
+/**
+ * `federation` globalizes every mesh's ids as they arrive, so a store fed by
+ * a model that isn't the first one loaded into the registry doesn't collide
+ * with ids already in the scene. Omit it for today's single-model sessions
+ * (all current callers) - the store then behaves exactly as before.
+ */
+export function createViewerMeshStore(federation?: { registry: FederationRegistry; modelId: string }): ViewerMeshStore {
   let meshes: MeshData[] = []
   const byId = new Map<number, MeshData[]>()
   const uniqueIds: number[] = []
@@ -45,6 +72,7 @@ export function createViewerMeshStore(): ViewerMeshStore {
     append(batch) {
       if (batch.length === 0) return
       for (const mesh of batch) {
+        if (federation) applyFederationOffsetToMesh(mesh, federation.registry, federation.modelId)
         meshes.push(mesh)
         const list = byId.get(mesh.expressId)
         if (list) list.push(mesh)
