@@ -15,6 +15,7 @@ import { CostAssemblyPanel } from '@/components/cost-assembly-panel'
 import { EstimationPanel } from '@/components/estimation-panel'
 import { AssemblyBuildUp } from '@/components/assembly-buildup'
 import { ElementCostCard } from '@/components/element-cost-card'
+import { ESTIMATION_ENABLED } from '@/lib/feature-flags'
 import {
   buildDataStore,
   buildSpatialTreeFromStore,
@@ -63,6 +64,8 @@ import { applyClickSelection, setsEqual } from '@/lib/selection'
 import {
   ghostExpressIds,
   visibleExpressIds,
+  OPENING_IFC_TYPES,
+  SPATIAL_IFC_TYPES,
   type DisplayMode,
 } from '@/lib/view-visibility'
 import { intersectIds } from '@/lib/spatial-scope'
@@ -75,6 +78,7 @@ import {
   type PropertyRef,
   type PropertyTreeNode,
   propertyRefKey,
+  propertySelectionLabel,
   toggleFilterKeys,
   unionPropertyNodeIds,
 } from '@/lib/property-tree'
@@ -319,6 +323,8 @@ export default function App() {
   const [displayMode, setDisplayMode] = useState<DisplayMode>('all')
   const [focusIds, setFocusIds] = useState<Set<number>>(() => new Set())
   const [hiddenIds, setHiddenIds] = useState<Set<number>>(() => new Set())
+  const [showOpenings, setShowOpenings] = useState(false)
+  const [showSpaces, setShowSpaces] = useState(false)
   const [treeScopeIds, setTreeScopeIds] = useState<Set<number> | null>(null)
   const [parseTick, setParseTick] = useState(0)
   const [mutationTick, setMutationTick] = useState(0)
@@ -1586,7 +1592,7 @@ export default function App() {
   searchElementsRef.current = searchElementsForAgent
 
   useEffect(() => {
-    if (!result) return
+    if (!ESTIMATION_ENABLED || !result) return
     void loadAssemblies()
   }, [result, loadAssemblies])
 
@@ -1737,9 +1743,8 @@ export default function App() {
   }, [warehouse, store, spec, parsing, reportTick, mutationTick])
 
   const queryIsolatedIds = queryState.ids
-  const groupingUiOpen =
-    leftTab === 'filters' || leftTab === 'views' || mobileTab === 'filters' || mobileTab === 'views'
-  const estimationUiOpen = scheduleOpen && bottomTab === 'estimation'
+  const groupingUiOpen = leftTab === 'filters' || mobileTab === 'filters'
+  const estimationUiOpen = ESTIMATION_ENABLED && scheduleOpen && bottomTab === 'estimation'
   const filterUiOpen = groupingUiOpen || filterColorize
 
   const filterTree = useMemo(() => {
@@ -1801,7 +1806,7 @@ export default function App() {
 
   useEffect(() => {
     if (warehouse) return
-    if (leftTab !== 'filters' && leftTab !== 'views' && mobileTab !== 'filters' && mobileTab !== 'views' && !filterColorize) return
+    if (leftTab !== 'filters' && mobileTab !== 'filters' && !filterColorize) return
     if (!store || filterRules.length === 0 || (filterRules.length === 1 && isIfcTypeRef(filterRules[0]))) {
       setStoreFilterTree([])
       return
@@ -2278,6 +2283,22 @@ export default function App() {
     setSimDate(null)
   }, [])
 
+  // The desktop app's packed geometry transport doesn't carry a per-mesh
+  // ifcType (dropped from the binary shard for size), so resolving "which
+  // rendered elements are openings/spaces" has to go through the same
+  // type lookup the Properties panel uses, keyed by expressId.
+  const hiddenTypeIds = useMemo(() => {
+    const next = new Set<number>()
+    if (showOpenings && showSpaces) return next
+    for (const id of allExpressIds) {
+      const type = store?.entities.getTypeName(id) ?? warehouseLookup?.get(id)?.ifcType
+      if (!type) continue
+      if (!showOpenings && OPENING_IFC_TYPES.has(type)) next.add(id)
+      else if (!showSpaces && SPATIAL_IFC_TYPES.has(type)) next.add(id)
+    }
+    return next
+  }, [allExpressIds, store, warehouseLookup, showOpenings, showSpaces])
+
   const onHideSelected = useCallback(() => {
     if (selectedIds.size === 0) return
     setHiddenIds((current) => {
@@ -2314,10 +2335,12 @@ export default function App() {
       }
       setDisplayMode('all')
       setFocusIds(new Set())
+      setFitToken((token) => token + 1)
       return
     }
     setDisplayMode('isolate')
     setFocusIds(new Set(selectedIds))
+    setFitToken((token) => token + 1)
   }, [displayMode, focusIds, selectedIds, filterNodeIds])
 
   const meshStats = useMemo(
@@ -2713,6 +2736,14 @@ export default function App() {
     [report, heading],
   )
 
+  const viewSourceLabel = useMemo(() => {
+    if (filterNodeKeys.length === 0) return null
+    const propertyIds = unionPropertyNodeIds(filterTree, filterNodeKeys)
+    const fromProperty = selectedIds.size === propertyIds.length && propertyIds.every((id) => selectedIds.has(id))
+    if (!fromProperty) return null
+    return propertySelectionLabel(filterTree, filterNodeKeys, filterRules[filterRules.length - 1]?.name)
+  }, [filterNodeKeys, filterTree, filterRules, selectedIds])
+
   const leftDock = {
     root: spatialRoot,
     store,
@@ -2793,15 +2824,6 @@ export default function App() {
     onReportMetrics: setReportMetrics,
     onReportFilter: setReportFilter,
     onFollowViewer: setFollowViewer,
-    savedViews,
-    activeViewId,
-    viewExportBusy: ifcExportBusy,
-    exportingViewId,
-    onSaveView,
-    onShowView,
-    onUpdateView,
-    onExportView,
-    onDeleteView,
   }
 
   const rightDock = {
@@ -2812,6 +2834,7 @@ export default function App() {
     triangles: meshStats.triangles,
     computedMetrics,
     selectionCount: selectedIds.size,
+    modelElementCount: allExpressIds.length,
     entities: selectedEntities,
     mutationCount: mutationView?.getModifiedEntityCount() ?? 0,
     onEditAttribute: mutationView
@@ -2841,6 +2864,20 @@ export default function App() {
             next.push(...rest)
           }
           publishMutations(next)
+        }
+      : undefined,
+    onAddProperty: mutationView
+      ? (pset: string, name: string, value: string, scope: 'selected' | 'model') => {
+          const targetIds = scope === 'model' ? allExpressIds : [...selectedIds]
+          if (targetIds.length === 0) return
+          for (const id of targetIds) mutationView.setProperty(id, pset, name, value)
+          const key = (patch: MutationPatch) => `${patch.kind}:${patch.expressId}:${patch.pset ?? ''}:${patch.name}`
+          const merged = new Map(mutationPatches.map((patch) => [key(patch), patch]))
+          for (const id of targetIds) {
+            const patch: MutationPatch = { expressId: id, kind: 'property', pset, name, value }
+            merged.set(key(patch), patch)
+          }
+          publishMutations([...merged.values()])
         }
       : undefined,
     onClose: () => {
@@ -2876,14 +2913,24 @@ export default function App() {
     followViewer,
     onReportRow,
     onReportExport,
+    savedViews,
+    activeViewId,
+    viewSourceLabel,
+    viewExportBusy: ifcExportBusy,
+    exportingViewId,
+    onSaveView,
+    onShowView,
+    onUpdateView,
+    onExportView,
+    onDeleteView,
   }
 
   const mobileTabs: Array<{ id: MobileTab; label: string }> = [
     { id: 'tree', label: 'Tree' },
     { id: 'filters', label: 'Filters' },
-    { id: 'views', label: 'Views' },
     { id: 'reports', label: 'Reports' },
     { id: 'properties', label: 'Properties' },
+    { id: 'views', label: 'Saved Views' },
     { id: 'quantities', label: 'Quantities' },
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'export', label: 'Export' },
@@ -2946,11 +2993,15 @@ export default function App() {
         calculatedView={calculatedView}
         canShowCalculatedView={quantities != null || quantityBusy}
         faceSelectMode={faceSelectMode}
+        showOpenings={showOpenings}
+        showSpaces={showSpaces}
         onFit={() => setFitToken((token) => token + 1)}
         onHide={onHideSelected}
         onGhost={onGhostSelected}
         onIsolate={onIsolateSelected}
         onShowAll={onShowAll}
+        onToggleOpenings={() => setShowOpenings((value) => !value)}
+        onToggleSpaces={() => setShowSpaces((value) => !value)}
         onToggleCalculatedView={onToggleCalculatedView}
         onToggleFaceSelectMode={() => setFaceSelectMode((value) => !value)}
         estimationPanes={estimationUiOpen ? estimationPanes : undefined}
@@ -3003,8 +3054,12 @@ export default function App() {
               selectedIds={selectedIds}
               isolatedIds={simLook ? null : isolatedIds}
               hiddenIds={hiddenIds}
+              hiddenTypeIds={hiddenTypeIds}
               ghostIds={ghostIds}
               viewIsolateIds={viewIsolateIds}
+              onShowAll={onShowAll}
+              onHideSelected={onHideSelected}
+              onIsolateSelected={onIsolateSelected}
               onSelect={onSelect}
               onHover={onHover}
               fitToken={fitToken}
@@ -3199,6 +3254,7 @@ export default function App() {
               </div>
               <div className="h-72">
                 {mobileTab === 'properties' ||
+                mobileTab === 'views' ||
                 mobileTab === 'export' ||
                 mobileTab === 'quantities' ||
                 mobileTab === 'dashboard' ? (
@@ -3232,20 +3288,22 @@ export default function App() {
           onHeightChange={setScheduleHeight}
           simDate={simDate}
           onSimDateChange={setSimDate}
-          assemblyCount={assemblyCatalog?.assemblies.length ?? 0}
+          assemblyCount={ESTIMATION_ENABLED ? assemblyCatalog?.assemblies.length ?? 0 : 0}
           assemblyPanel={
-            <CostAssemblyPanel
-              catalog={assemblyCatalog}
-              loading={assemblyLoading}
-              error={assemblyError}
-              selectedId={selectedAssemblyId}
-              onSelect={onSelectAssembly}
-              onReload={() => void loadAssemblies()}
-              onOpenFile={() => void onOpenAssemblyFile()}
-            />
+            ESTIMATION_ENABLED ? (
+              <CostAssemblyPanel
+                catalog={assemblyCatalog}
+                loading={assemblyLoading}
+                error={assemblyError}
+                selectedId={selectedAssemblyId}
+                onSelect={onSelectAssembly}
+                onReload={() => void loadAssemblies()}
+                onOpenFile={() => void onOpenAssemblyFile()}
+              />
+            ) : null
           }
-          estimationCount={estimation.boqs.reduce((sum, boq) => sum + flattenBoq(boq.root).length, 0)}
-          showEstimationTab
+          estimationCount={ESTIMATION_ENABLED ? estimation.boqs.reduce((sum, boq) => sum + flattenBoq(boq.root).length, 0) : 0}
+          showEstimationTab={ESTIMATION_ENABLED}
         />
       ) : null}
         </>
