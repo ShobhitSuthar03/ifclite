@@ -94,10 +94,12 @@ export function parseSessionJson(json: string | null | undefined): ProjectSessio
     const parsed = JSON.parse(json) as ProjectSession
     if (parsed?.version !== 1) return null
     const rawTab = parsed.leftTab as string
+    // 'views' was a valid LeftTab before Saved Views moved to the right dock -
+    // an older persisted session naming it should just fall back to 'tree'.
     const leftTab =
       rawTab === 'breakdown' || rawTab === 'lens'
         ? 'filters'
-        : rawTab === 'tree' || rawTab === 'filters' || rawTab === 'reports' || rawTab === 'views'
+        : rawTab === 'tree' || rawTab === 'filters' || rawTab === 'reports'
           ? rawTab
           : 'tree'
     return {

@@ -119,7 +119,11 @@ describe('project session', () => {
     expect(parseSessionJson(JSON.stringify(session))?.leftTab).toBe('filters')
     session.leftTab = 'lens'
     expect(parseSessionJson(JSON.stringify(session))?.leftTab).toBe('filters')
+  })
+
+  it('maps a leftover Views tab (now on the right dock) onto Tree', () => {
+    const session = emptySession('abc', 'a.ifc') as { leftTab: string }
     session.leftTab = 'views'
-    expect(parseSessionJson(JSON.stringify(session))?.leftTab).toBe('views')
+    expect(parseSessionJson(JSON.stringify(session))?.leftTab).toBe('tree')
   })
 })

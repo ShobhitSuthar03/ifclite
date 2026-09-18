@@ -1,15 +1,17 @@
-import { FileDown, Info, Calculator, LayoutDashboard } from 'lucide-react'
+import { FileDown, Info, Calculator, LayoutDashboard, Layers } from 'lucide-react'
 import { CsvExportPanel } from '@/components/csv-export-panel'
 import { DashboardPanel } from '@/components/dashboard-panel'
 import { FormworkPanel } from '@/components/formwork-panel'
 import { PanelTabs } from '@/components/panel-tabs'
-import { PropertiesPanel } from '@/components/properties-panel'
+import { PropertiesPanel, type PropertyScope } from '@/components/properties-panel'
+import { ViewsPanel } from '@/components/views-panel'
 import type { EntityData } from '@/lib/ifc-data'
 import type { AreaMetrics, QuantityResult } from '@/lib/geometry-qto'
 import type { ReportResult, ReportRow } from '@/lib/bim-sql'
+import type { SavedView } from '@/lib/saved-views'
 import type { TakeoffProgress } from '@/lib/takeoff-scope'
 
-export type RightTab = 'properties' | 'quantities' | 'export' | 'dashboard'
+export type RightTab = 'properties' | 'views' | 'quantities' | 'export' | 'dashboard'
 
 type RightDockProps = {
   tab: RightTab
@@ -21,10 +23,12 @@ type RightDockProps = {
   triangles: number
   computedMetrics: AreaMetrics | null
   selectionCount: number
+  modelElementCount: number
   entities: EntityData[]
   mutationCount: number
   onEditAttribute?: (name: string, value: string) => void
   onEditProperty?: (pset: string, name: string, value: string) => void
+  onAddProperty?: (pset: string, name: string, value: string, scope: PropertyScope) => void
   onClose: () => void
   fileName: string
   bytes: Uint8Array | null
@@ -52,6 +56,16 @@ type RightDockProps = {
   followViewer: boolean
   onReportRow: (row: ReportRow) => void
   onReportExport: (format: 'csv' | 'json' | 'xlsx') => void
+  savedViews: SavedView[]
+  activeViewId: string | null
+  viewSourceLabel?: string | null
+  viewExportBusy?: boolean
+  exportingViewId?: string | null
+  onSaveView: (name: string) => void
+  onShowView: (view: SavedView) => void
+  onUpdateView: (view: SavedView) => void
+  onExportView: (view: SavedView) => void
+  onDeleteView: (view: SavedView) => void
   showTabs?: boolean
 }
 
@@ -65,10 +79,12 @@ export function RightDock({
   triangles,
   computedMetrics,
   selectionCount,
+  modelElementCount,
   entities,
   mutationCount,
   onEditAttribute,
   onEditProperty,
+  onAddProperty,
   onClose,
   fileName,
   bytes,
@@ -96,6 +112,16 @@ export function RightDock({
   followViewer,
   onReportRow,
   onReportExport,
+  savedViews,
+  activeViewId,
+  viewSourceLabel = null,
+  viewExportBusy = false,
+  exportingViewId = null,
+  onSaveView,
+  onShowView,
+  onUpdateView,
+  onExportView,
+  onDeleteView,
   showTabs = true,
 }: RightDockProps) {
   return (
@@ -106,6 +132,7 @@ export function RightDock({
           onChange={onTabChange}
           tabs={[
             { id: 'properties', label: 'Properties', icon: <Info className="h-3.5 w-3.5" /> },
+            { id: 'views', label: 'Saved Views', icon: <Layers className="h-3.5 w-3.5" /> },
             { id: 'quantities', label: 'Quantities', icon: <Calculator className="h-3.5 w-3.5" /> },
             { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="h-3.5 w-3.5" /> },
             { id: 'export', label: 'Export', icon: <FileDown className="h-3.5 w-3.5" /> },
@@ -123,11 +150,27 @@ export function RightDock({
             triangles={triangles}
             computedMetrics={computedMetrics}
             selectionCount={selectionCount}
+            modelElementCount={modelElementCount}
             mutationCount={mutationCount}
             embedded
             onClose={onClose}
             onEditAttribute={onEditAttribute}
             onEditProperty={onEditProperty}
+            onAddProperty={onAddProperty}
+          />
+        ) : tab === 'views' ? (
+          <ViewsPanel
+            views={savedViews}
+            selectedCount={selectionCount}
+            activeViewId={activeViewId}
+            sourceLabel={viewSourceLabel}
+            exportBusy={viewExportBusy}
+            exportingViewId={exportingViewId}
+            onSave={onSaveView}
+            onShow={onShowView}
+            onUpdate={onUpdateView}
+            onExport={onExportView}
+            onDelete={onDeleteView}
           />
         ) : tab === 'quantities' ? (
           <FormworkPanel

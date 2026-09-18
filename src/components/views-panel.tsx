@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Download, Layers, Trash2 } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { Download, Layers, Search, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { defaultViewName, type SavedView } from '@/lib/saved-views'
@@ -36,6 +36,7 @@ export function ViewsPanel({
   onDelete,
 }: ViewsPanelProps) {
   const [name, setName] = useState('')
+  const [search, setSearch] = useState('')
   const canSave = selectedCount > 0
   const fallbackName = sourceLabel || defaultViewName(views)
   const commit = () => {
@@ -43,6 +44,11 @@ export function ViewsPanel({
     onSave(name.trim() || fallbackName)
     setName('')
   }
+  const filteredViews = useMemo(() => {
+    const needle = search.trim().toLowerCase()
+    if (!needle) return views
+    return views.filter((view) => view.name.toLowerCase().includes(needle))
+  }, [views, search])
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -85,12 +91,28 @@ export function ViewsPanel({
           </p>
         ) : null}
       </div>
+      {views.length > 0 ? (
+        <div className="border-b border-border p-2">
+          <label className="relative block">
+            <Search className="pointer-events-none absolute top-1/2 left-2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search views…"
+              className={cn(fieldClass, 'pl-7')}
+            />
+          </label>
+        </div>
+      ) : null}
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-1 p-2">
           {views.length === 0 ? (
             <p className="px-1 py-4 text-xs text-muted-foreground italic">No saved views yet.</p>
+          ) : filteredViews.length === 0 ? (
+            <p className="px-1 py-4 text-xs text-muted-foreground italic">No views match “{search.trim()}”.</p>
           ) : (
-            views.map((view) => {
+            filteredViews.map((view) => {
               const active = view.id === activeViewId
               const exporting = exportBusy && exportingViewId === view.id
               return (

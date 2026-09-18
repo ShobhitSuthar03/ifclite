@@ -1,11 +1,16 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Check, ChevronDown, Pencil, X } from 'lucide-react'
+import { Check, ChevronDown, Pencil, Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import type { EntityData } from '@/lib/ifc-data'
 import { AREA_FIELDS, STANDARD_FIELDS, type AreaMetrics } from '@/lib/geometry-qto'
 import { commonProperties, selectionTypeLabel, type CommonPropertyRow } from '@/lib/common-properties'
-import { formatCount } from '@/lib/utils'
+import { cn, formatCount } from '@/lib/utils'
+
+export type PropertyScope = 'selected' | 'model'
+
+const fieldClass =
+  'h-7 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-ring'
 
 type PropertiesPanelProps = {
   data: EntityData | null
@@ -16,11 +21,13 @@ type PropertiesPanelProps = {
   triangles: number
   computedMetrics: AreaMetrics | null
   selectionCount?: number
+  modelElementCount?: number
   mutationCount?: number
   embedded?: boolean
   onClose: () => void
   onEditAttribute?: (name: string, value: string) => void
   onEditProperty?: (pset: string, name: string, value: string) => void
+  onAddProperty?: (pset: string, name: string, value: string, scope: PropertyScope) => void
 }
 
 export function PropertiesPanel({
@@ -31,11 +38,13 @@ export function PropertiesPanel({
   vertices,
   triangles,
   computedMetrics,
+  modelElementCount = 0,
   mutationCount = 0,
   embedded = false,
   onClose,
   onEditAttribute,
   onEditProperty,
+  onAddProperty,
 }: PropertiesPanelProps) {
   const multi = entities.length > 1
   const primary = data ?? entities[0] ?? null
@@ -47,14 +56,22 @@ export function PropertiesPanel({
     setEditMode(false)
   }, [selectionKey])
 
+  const addPropertyForm = onAddProperty ? (
+    <AddPropertyForm selectionCount={entities.length} modelElementCount={modelElementCount} onAdd={onAddProperty} />
+  ) : null
+
   const inner = !primary ? (
-    <p className="px-3 py-6 text-xs text-muted-foreground">
-      {parsing
-        ? 'Property sets will appear here once the IFC index is ready. Click an element to inspect it.'
-        : 'Click a wall, slab, or tree row to see GlobalId, attributes, property sets, and quantities.'}
-    </p>
+    <>
+      {addPropertyForm}
+      <p className="px-3 py-6 text-xs text-muted-foreground">
+        {parsing
+          ? 'Property sets will appear here once the IFC index is ready. Click an element to inspect it.'
+          : 'Click a wall, slab, or tree row to see GlobalId, attributes, property sets, and quantities.'}
+      </p>
+    </>
   ) : (
     <>
+      {addPropertyForm}
       <div className="flex items-start gap-2 p-3">
         <div className="min-w-0 flex-1 rounded bg-black/20 p-2">
           <p className="text-[13px] font-bold text-primary">
@@ -209,6 +226,96 @@ export function PropertiesPanel({
 
   return (
     <aside className="flex h-full min-h-0 w-full flex-col border-border bg-card lg:w-80 lg:border-l">{inner}</aside>
+  )
+}
+
+function AddPropertyForm({
+  selectionCount,
+  modelElementCount,
+  onAdd,
+}: {
+  selectionCount: number
+  modelElementCount: number
+  onAdd: (pset: string, name: string, value: string, scope: PropertyScope) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [pset, setPset] = useState('VERBIM')
+  const [name, setName] = useState('')
+  const [value, setValue] = useState('')
+  const [scope, setScope] = useState<PropertyScope>('selected')
+
+  const scopeCount = scope === 'model' ? modelElementCount : selectionCount
+  const canSubmit = pset.trim() !== '' && name.trim() !== '' && scopeCount > 0
+
+  const submit = () => {
+    if (!canSubmit) return
+    onAdd(pset.trim(), name.trim(), value.trim(), scope)
+    setName('')
+    setValue('')
+  }
+
+  return (
+    <div className="border-b border-border p-3">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between text-[12px] font-semibold"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+      >
+        <span className="flex items-center gap-1.5">
+          <Plus className="h-3.5 w-3.5" />
+          Add property
+        </span>
+        <ChevronDown className={cn('h-3.5 w-3.5 text-muted-foreground transition-transform', !open && '-rotate-90')} />
+      </button>
+      {open ? (
+        <form
+          className="mt-2 space-y-2"
+          onSubmit={(event) => {
+            event.preventDefault()
+            submit()
+          }}
+        >
+          <div className="grid grid-cols-2 gap-1.5">
+            <label className="block text-[11px]">
+              <span className="mb-0.5 block text-muted-foreground">Property set</span>
+              <input className={fieldClass} value={pset} onChange={(event) => setPset(event.target.value)} placeholder="VERBIM" />
+            </label>
+            <label className="block text-[11px]">
+              <span className="mb-0.5 block text-muted-foreground">Property name</span>
+              <input className={fieldClass} value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Status" />
+            </label>
+          </div>
+          <label className="block text-[11px]">
+            <span className="mb-0.5 block text-muted-foreground">Value</span>
+            <input className={fieldClass} value={value} onChange={(event) => setValue(event.target.value)} />
+          </label>
+          <div className="flex flex-wrap items-center gap-3 text-[11px]">
+            <label className="flex items-center gap-1">
+              <input
+                type="radio"
+                name="add-property-scope"
+                checked={scope === 'selected'}
+                onChange={() => setScope('selected')}
+              />
+              Selected ({formatCount(selectionCount)})
+            </label>
+            <label className="flex items-center gap-1">
+              <input type="radio" name="add-property-scope" checked={scope === 'model'} onChange={() => setScope('model')} />
+              Whole model ({formatCount(modelElementCount)})
+            </label>
+          </div>
+          <Button type="submit" size="sm" className="w-full" disabled={!canSubmit}>
+            Add property
+          </Button>
+          {scopeCount === 0 ? (
+            <p className="text-[11px] text-muted-foreground italic">
+              {scope === 'selected' ? 'Select elements first, or switch to “Whole model”.' : 'Open a model first.'}
+            </p>
+          ) : null}
+        </form>
+      ) : null}
+    </div>
   )
 }
 
