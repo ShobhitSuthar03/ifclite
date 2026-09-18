@@ -7,7 +7,6 @@ import {
   emptyAabb,
   expandAabb,
   normalize,
-  planeKey,
   scale,
   sub,
   triangleArea,
@@ -22,7 +21,6 @@ type RawTri = {
   normal: Vec3
   d: number
   area: number
-  plane: string
 }
 
 function readVertex(positions: ArrayLike<number>, index: number, origin: Vec3): Vec3 {
@@ -80,7 +78,7 @@ function meshTriangles(mesh: QtoMesh): RawTri[] {
     const area = triangleArea(a, b, c)
     if (!n || area < 1e-12) continue
     const d = dot(n, a)
-    tris.push({ a, b, c, normal: n, d, area, plane: planeKey(n, d) })
+    tris.push({ a, b, c, normal: n, d, area })
   }
   return tris
 }
@@ -102,6 +100,23 @@ function unionFind(size: number): { find: (i: number) => number; union: (a: numb
   return { find, union }
 }
 
+// A tessellator's per-triangle normal/offset carries floating-point noise, so
+// two triangles that are visually one continuous flat surface can land in
+// different rounded plane buckets and never merge (#faces-not-correctly-
+// selected: the QTO click-to-highlight would then only light up part of the
+// surface). Comparing each *shared edge* against an angle + distance
+// tolerance - instead of requiring an exact quantized-plane-key match - fixes
+// that without merging across a real fold (a hip/valley roof edge or a
+// wall/roof corner is many degrees away from this 2° budget).
+const COPLANAR_ANGLE_COS = Math.cos((2 * Math.PI) / 180)
+const COPLANAR_DISTANCE_TOL_M = 0.005
+
+function isCoplanarPair(a: RawTri, b: RawTri): boolean {
+  if (dot(a.normal, b.normal) < COPLANAR_ANGLE_COS) return false
+  const centroidA = centroid([a.a, a.b, a.c])
+  return Math.abs(dot(a.normal, centroidA) - b.d) < COPLANAR_DISTANCE_TOL_M
+}
+
 function connectCoplanar(tris: RawTri[]): number[] {
   const { find, union } = unionFind(tris.length)
   const edgeOwner = new Map<string, number>()
@@ -112,10 +127,12 @@ function connectCoplanar(tris: RawTri[]): number[] {
       const ka = vertexKey(verts[e])
       const kb = vertexKey(verts[(e + 1) % 3])
       const edge = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`
-      const key = `${tri.plane}#${edge}`
-      const other = edgeOwner.get(key)
-      if (other == null) edgeOwner.set(key, i)
-      else union(i, other)
+      const other = edgeOwner.get(edge)
+      if (other == null) {
+        edgeOwner.set(edge, i)
+      } else if (isCoplanarPair(tri, tris[other])) {
+        union(i, other)
+      }
     }
   }
   return tris.map((_, i) => find(i))

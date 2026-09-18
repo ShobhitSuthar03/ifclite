@@ -117,23 +117,39 @@ export function addQuantityFaceOverlay(
 }
 
 /** Distinct from FACE_KIND_COLOR and CONTACT_FACE_COLOR so a manually gathered
- * "takeoff basket" face reads as a selection, not a classification. */
-export const BASKET_FACE_COLOR = 0xffd60a
+ * "takeoff basket" face reads as a selection, not a classification. A magenta
+ * accent rather than the previous yellow - yellow-on-orange (a very common
+ * wall/roof material color) has almost no contrast, which is why the outline
+ * was hard to spot. */
+export const BASKET_FACE_COLOR = 0xec4899
+const BASKET_ACCENT_RGB: [number, number, number] = [0.925, 0.282, 0.6] // 0xec4899 as 0..1
 
 /** Manual-basket face highlight - always visible (native or calculated view),
- * unlike addQuantityFaceOverlay which depends on a computed QuantityResult. */
-export function addBasketFaceOverlay(group: THREE.Group, face: FaceQuantity) {
+ * unlike addQuantityFaceOverlay which depends on a computed QuantityResult.
+ *
+ * The fill leans mostly on the element's own material color - it should still
+ * read as "this surface," not an unrelated sticker - but with enough accent
+ * mixed in, plus a solid-color outline, that a selected face is unmistakable
+ * even against a similarly-hued material. */
+export function addBasketFaceOverlay(group: THREE.Group, face: FaceQuantity, baseColor?: [number, number, number]) {
   if (face.positions.length < 9) return
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(offsetAndWound(face.positions, face.normal), 3))
   geometry.computeVertexNormals()
+  const fillColor = baseColor
+    ? new THREE.Color(
+        baseColor[0] * 0.75 + BASKET_ACCENT_RGB[0] * 0.25,
+        baseColor[1] * 0.75 + BASKET_ACCENT_RGB[1] * 0.25,
+        baseColor[2] * 0.75 + BASKET_ACCENT_RGB[2] * 0.25,
+      )
+    : new THREE.Color(BASKET_FACE_COLOR)
   const material = new THREE.MeshBasicMaterial({
-    color: BASKET_FACE_COLOR,
+    color: fillColor,
     side: THREE.DoubleSide,
     depthTest: true,
     depthWrite: true,
     transparent: true,
-    opacity: 0.55,
+    opacity: baseColor ? 0.5 : 0.6,
     toneMapped: false,
     polygonOffset: true,
     polygonOffsetFactor: -3,
@@ -144,13 +160,16 @@ export function addBasketFaceOverlay(group: THREE.Group, face: FaceQuantity) {
   mesh.userData.faceId = face.faceId
   mesh.renderOrder = 9
   group.add(mesh)
+  const outline = buildFaceOutline(mesh, BASKET_FACE_COLOR)
+  outline.renderOrder = 10
+  group.add(outline)
 }
 
 /** Thin edge outline drawn on top of the overlay mesh for the actively picked face. */
-export function buildFaceOutline(mesh: THREE.Mesh): THREE.LineSegments {
+export function buildFaceOutline(mesh: THREE.Mesh, color = 0xffffff): THREE.LineSegments {
   const outline = new THREE.LineSegments(
     new THREE.EdgesGeometry(mesh.geometry),
-    new THREE.LineBasicMaterial({ color: 0xffffff, toneMapped: false, depthTest: false }),
+    new THREE.LineBasicMaterial({ color, toneMapped: false, depthTest: false }),
   )
   outline.renderOrder = 9
   return outline

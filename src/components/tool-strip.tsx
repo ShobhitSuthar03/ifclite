@@ -1,4 +1,4 @@
-import { Bot, Eye, EyeOff, Focus, Ghost, Home, Layers, ListTree, MousePointerClick, Palette } from 'lucide-react'
+import { Bot, Box, DoorOpen, Eye, EyeOff, Focus, Ghost, Home, Layers, ListTree, MousePointerClick, Palette } from 'lucide-react'
 import type { DisplayMode } from '@/lib/view-visibility'
 import type { EstimationPaneId, EstimationPanes } from '@/lib/panel-layout'
 import { cn, formatCount } from '@/lib/utils'
@@ -13,6 +13,8 @@ type ToolStripProps = {
   calculatedView: boolean
   canShowCalculatedView: boolean
   faceSelectMode: boolean
+  showOpenings: boolean
+  showSpaces: boolean
   onFit: () => void
   onHide: () => void
   onGhost: () => void
@@ -20,6 +22,8 @@ type ToolStripProps = {
   onShowAll: () => void
   onToggleCalculatedView: () => void
   onToggleFaceSelectMode: () => void
+  onToggleOpenings: () => void
+  onToggleSpaces: () => void
   estimationPanes?: EstimationPanes
   onToggleEstimationPane?: (id: EstimationPaneId) => void
 }
@@ -37,6 +41,8 @@ export function ToolStrip({
   calculatedView,
   canShowCalculatedView,
   faceSelectMode,
+  showOpenings,
+  showSpaces,
   onFit,
   onHide,
   onGhost,
@@ -44,6 +50,8 @@ export function ToolStrip({
   onShowAll,
   onToggleCalculatedView,
   onToggleFaceSelectMode,
+  onToggleOpenings,
+  onToggleSpaces,
   estimationPanes,
   onToggleEstimationPane,
 }: ToolStripProps) {
@@ -86,6 +94,25 @@ export function ToolStrip({
       <button type="button" title="Show all elements" disabled={!canShowAll} className={btn} onClick={onShowAll}>
         <Eye className="h-3.5 w-3.5" />
         <span className="hidden sm:inline">Show all</span>
+      </button>
+      <span className="mx-1 h-5 w-px bg-border" />
+      <button
+        type="button"
+        title={showOpenings ? 'Hide door/window openings' : 'Show door/window openings'}
+        className={cn(btn, showOpenings && 'bg-primary/20 text-primary')}
+        onClick={onToggleOpenings}
+      >
+        <DoorOpen className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">Openings</span>
+      </button>
+      <button
+        type="button"
+        title={showSpaces ? 'Hide spaces/zones' : 'Show spaces/zones'}
+        className={cn(btn, showSpaces && 'bg-primary/20 text-primary')}
+        onClick={onToggleSpaces}
+      >
+        <Box className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">Spaces</span>
       </button>
       <span className="mx-1 h-5 w-px bg-border" />
       <button

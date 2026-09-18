@@ -1,5 +1,15 @@
 export type DisplayMode = 'all' | 'ghost' | 'isolate'
 
+/**
+ * Non-physical IFC types the geometry pipeline renders as translucent debug
+ * overlays rather than real materials — opening voids used only to cut holes
+ * into walls/slabs, and room/zone volumes. Most BIM viewers (BIMcollab,
+ * Solibri, …) hide these by default, so the viewer does too, but the user can
+ * toggle each group back on.
+ */
+export const OPENING_IFC_TYPES: ReadonlySet<string> = new Set(['IfcOpeningElement'])
+export const SPATIAL_IFC_TYPES: ReadonlySet<string> = new Set(['IfcSpace', 'IfcSpatialZone'])
+
 export function nextHiddenSet(current: Set<number>, id: number): Set<number> {
   const next = new Set(current)
   next.add(id)

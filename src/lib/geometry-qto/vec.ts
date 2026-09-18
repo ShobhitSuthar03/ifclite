@@ -88,19 +88,6 @@ export function vertexKey(p: Vec3, scale = 1000): string {
   return `${Math.round(p.x * scale)}:${Math.round(p.y * scale)}:${Math.round(p.z * scale)}`
 }
 
-export function planeKey(normal: Vec3, d: number): string {
-  let nx = normal.x
-  let ny = normal.y
-  let nz = normal.z
-  let offset = d
-  if (nx < -1e-6 || (Math.abs(nx) < 1e-6 && ny < -1e-6) || (Math.abs(nx) < 1e-6 && Math.abs(ny) < 1e-6 && nz < 0)) {
-    nx = -nx
-    ny = -ny
-    nz = -nz
-    offset = -offset
-  }
-  return `${Math.round(nx * 1000)}:${Math.round(ny * 1000)}:${Math.round(nz * 1000)}:${Math.round(offset * 1000)}`
-}
 
 export function planeBasis(normal: Vec3): { u: Vec3; v: Vec3 } {
   const axis = Math.abs(normal.y) < 0.9 ? vec3(0, 1, 0) : vec3(1, 0, 0)

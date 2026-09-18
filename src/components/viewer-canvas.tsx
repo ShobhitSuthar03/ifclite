@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { Scissors } from 'lucide-react'
 import type { FaceQuantity } from '@/lib/geometry-qto'
 import { FaceLayerLegend } from '@/components/face-layer-legend'
 import { applyCameraFitBox } from '@/lib/fit-camera'
@@ -23,8 +24,14 @@ import {
 } from '@/lib/geometry-qto/overlay-mesh'
 import { applyClickSelection, isAdditiveModifier, setsEqual, touchedSelectionIds } from '@/lib/selection'
 import { VIEWPORT_THEME, type Theme } from '@/lib/theme'
+import { cn } from '@/lib/utils'
 
 const DRAG_THRESHOLD_PX = 4
+
+type SectionAxis = 'x' | '-x' | 'y' | '-y' | 'z' | '-z'
+const SECTION_AXES: SectionAxis[] = ['x', '-x', 'y', '-y', 'z', '-z']
+const SECTION_AXIS_INDEX: Record<SectionAxis, 0 | 1 | 2> = { x: 0, '-x': 0, y: 1, '-y': 1, z: 2, '-z': 2 }
+const SECTION_AXIS_SIGN: Record<SectionAxis, 1 | -1> = { x: 1, '-x': -1, y: 1, '-y': -1, z: 1, '-z': -1 }
 
 function packedLook(hidden: boolean, selected: boolean, hovered: boolean, ghost: boolean): number {
   if (hidden) return ELEMENT_HIDDEN
@@ -84,6 +91,11 @@ type ViewerCanvasProps = {
   selectedIds: Set<number>
   isolatedIds: Set<number> | null
   hiddenIds: Set<number>
+  /** expressIds of a whole IFC type to leave out of the render entirely (e.g.
+   * opening voids, space volumes) — resolved by type name upstream, since the
+   * desktop app's packed geometry transport doesn't carry per-mesh ifcType.
+   * A category-level hide, distinct from `hiddenIds`' per-element one. */
+  hiddenTypeIds: ReadonlySet<number>
   ghostIds: Set<number>
   viewIsolateIds: Set<number> | null
   onSelect: (expressId: number | null, additive?: boolean) => void
@@ -102,6 +114,10 @@ type ViewerCanvasProps = {
   onFaceCandidate?: (info: { expressId: number; point: [number, number, number]; normal: [number, number, number] } | null) => void
   onRegisterBasket?: (propertyName: string) => void
   onClearBasket?: () => void
+  /** Right-click context menu actions - mirror the ToolStrip buttons. */
+  onShowAll: () => void
+  onHideSelected: () => void
+  onIsolateSelected: () => void
 }
 
 export const ViewerCanvas = memo(function ViewerCanvas({
@@ -111,6 +127,7 @@ export const ViewerCanvas = memo(function ViewerCanvas({
   selectedIds,
   isolatedIds,
   hiddenIds,
+  hiddenTypeIds,
   ghostIds,
   viewIsolateIds,
   onSelect,
@@ -125,17 +142,26 @@ export const ViewerCanvas = memo(function ViewerCanvas({
   onFaceCandidate,
   onRegisterBasket,
   onClearBasket,
+  onShowAll,
+  onHideSelected,
+  onIsolateSelected,
 }: ViewerCanvasProps) {
   const [faceLayers, setFaceLayers] = useState<Set<FaceLayer>>(() => new Set(['all']))
   const [propertyName, setPropertyName] = useState('')
   const [meshPump, setMeshPump] = useState(0)
   const onSceneReadyRef = useRef(onSceneReady)
+  const appliedHiddenTypeIdsRef = useRef<ReadonlySet<number> | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null)
+  const contextMenuRef = useRef<HTMLDivElement>(null)
+  const [sectionEnabled, setSectionEnabled] = useState(false)
+  const [sectionAxis, setSectionAxis] = useState<SectionAxis>('z')
+  const [sectionRatio, setSectionRatio] = useState(0.5)
 
   useEffect(() => {
     if (!geometryComplete) return
     return geometry.subscribe(() => setMeshPump((tick) => tick + 1))
   }, [geometry, geometryComplete])
-  const meshes = geometry.list()
+  const meshes = geometry.list().filter((mesh) => !hiddenTypeIds.has(mesh.expressId))
 
   // Elements currently shown by the overlay - independent of selection, since the
   // overlay reflects the last calculation, not the current pick.
@@ -207,6 +233,7 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     renderer.toneMapping = THREE.NoToneMapping
     renderer.toneMappingExposure = 1
     renderer.sortObjects = false
+    renderer.localClippingEnabled = true
 
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(colors.clear)
@@ -373,6 +400,7 @@ export const ViewerCanvas = memo(function ViewerCanvas({
       pointerDownX = event.clientX
       pointerDownY = event.clientY
       didDrag = false
+      setContextMenu(null)
     }
 
     const onPointerMove = (event: PointerEvent) => {
@@ -436,8 +464,13 @@ export const ViewerCanvas = memo(function ViewerCanvas({
       }
     }
 
-    const onContextMenu = (event: Event) => {
+    const onContextMenu = (event: MouseEvent) => {
       event.preventDefault()
+      if (didDrag) return
+      // Rough menu footprint so it doesn't hang off the right/bottom edge.
+      const x = Math.min(event.clientX, window.innerWidth - 160)
+      const y = Math.min(event.clientY, window.innerHeight - 110)
+      setContextMenu({ x, y, hasSelection: selectedIdsRef.current.size > 0 })
     }
 
     canvas.addEventListener('pointerdown', onPointerDown)
@@ -486,10 +519,18 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     if (!batcher) return
 
     const revision = geometry.revision()
-    if ((batcher.object.userData.revision as number | undefined) !== revision) {
+    // The batcher only ever appends, so excluding a type (opening/space
+    // visibility) after its meshes are already on the GPU needs a full
+    // rebuild — a plain revision check misses this because the type index
+    // (`hiddenTypeIds`) usually only resolves *after* the first full pump,
+    // once `store` parses in the background (issue: streaming avoids OOM by
+    // deferring that parse until triangles are already on screen).
+    const hiddenTypesChanged = appliedHiddenTypeIdsRef.current !== hiddenTypeIds
+    if ((batcher.object.userData.revision as number | undefined) !== revision || hiddenTypesChanged) {
       batcher.clear()
       meshIndexRef.current = 0
       batcher.object.userData.revision = revision
+      appliedHiddenTypeIdsRef.current = hiddenTypeIds
       requestRenderRef.current()
     }
 
@@ -507,7 +548,53 @@ export const ViewerCanvas = memo(function ViewerCanvas({
       return () => cancelAnimationFrame(frame)
     }
     onSceneReadyRef.current?.()
-  }, [meshes, meshPump, geometryComplete, geometry])
+  }, [meshes, meshPump, geometryComplete, geometry, hiddenTypeIds])
+
+  // A new model can be a completely different size, so a plane positioned by
+  // fraction-of-bounds from the last one would land somewhere meaningless.
+  useEffect(() => {
+    if (fitToken === 0) return
+    setSectionEnabled(false)
+    setSectionRatio(0.5)
+  }, [fitToken])
+
+  useEffect(() => {
+    const batcher = batcherRef.current
+    if (!batcher) return
+    if (!sectionEnabled || batcher.box.isEmpty()) {
+      batcher.setClippingPlanes([])
+      requestRenderRef.current()
+      return
+    }
+    const axisIndex = SECTION_AXIS_INDEX[sectionAxis]
+    const min = batcher.box.min.getComponent(axisIndex)
+    const max = batcher.box.max.getComponent(axisIndex)
+    const value = min + (max - min) * sectionRatio
+    const normal = new THREE.Vector3()
+    normal.setComponent(axisIndex, SECTION_AXIS_SIGN[sectionAxis])
+    const pointOnPlane = new THREE.Vector3()
+    pointOnPlane.setComponent(axisIndex, value)
+    const plane = new THREE.Plane(normal, -normal.dot(pointOnPlane))
+    batcher.setClippingPlanes([plane])
+    requestRenderRef.current()
+  }, [sectionEnabled, sectionAxis, sectionRatio, geometryComplete])
+
+  useEffect(() => {
+    if (!contextMenu) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setContextMenu(null)
+    }
+    const onWindowPointerDown = (event: PointerEvent) => {
+      if (contextMenuRef.current?.contains(event.target as Node)) return
+      setContextMenu(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('pointerdown', onWindowPointerDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('pointerdown', onWindowPointerDown)
+    }
+  }, [contextMenu])
 
   useEffect(() => {
     isolatedRef.current = isolatedIds
@@ -617,13 +704,19 @@ export const ViewerCanvas = memo(function ViewerCanvas({
     if (!group) return
     clearObject3d(group)
     if (basketFaces) {
-      for (const face of basketFaces) addBasketFaceOverlay(group, face)
+      for (const face of basketFaces) {
+        const baseMesh = geometry.meshesForIds(new Set([face.expressId]))[0]
+        const baseColor = baseMesh?.color
+          ? ([baseMesh.color[0], baseMesh.color[1], baseMesh.color[2]] as [number, number, number])
+          : undefined
+        addBasketFaceOverlay(group, face, baseColor)
+      }
     }
     requestRenderRef.current()
     return () => {
       clearObject3d(group)
     }
-  }, [basketFaces])
+  }, [basketFaces, geometry])
 
   useEffect(() => {
     const batcher = batcherRef.current
@@ -658,6 +751,93 @@ export const ViewerCanvas = memo(function ViewerCanvas({
           layers={faceLayers}
           onToggle={(layer) => setFaceLayers((current) => toggleFaceLayer(current, layer))}
         />
+      ) : null}
+      <div className="absolute top-3 right-3 flex w-fit flex-col gap-1 rounded-md border border-border bg-card/95 px-1.5 py-1 text-[11px] shadow-lg backdrop-blur">
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            title={sectionEnabled ? 'Turn off section' : 'Cut a section through the model'}
+            className={cn(
+              'flex h-7 items-center gap-1 rounded px-2 text-foreground hover:bg-accent',
+              sectionEnabled && 'bg-primary/20 text-primary',
+            )}
+            onClick={() => setSectionEnabled((value) => !value)}
+          >
+            <Scissors className="h-3.5 w-3.5" />
+            <span>Section</span>
+          </button>
+          {sectionEnabled ? (
+            <>
+              <span className="mx-0.5 h-5 w-px bg-border" />
+              {SECTION_AXES.map((axis) => (
+                <button
+                  key={axis}
+                  type="button"
+                  title={`Cut along ${axis.toUpperCase()}`}
+                  className={cn(
+                    'flex h-7 w-6 items-center justify-center rounded text-foreground hover:bg-accent',
+                    sectionAxis === axis && 'bg-primary/20 text-primary',
+                  )}
+                  onClick={() => setSectionAxis(axis)}
+                >
+                  {axis.toUpperCase()}
+                </button>
+              ))}
+            </>
+          ) : null}
+        </div>
+        {sectionEnabled ? (
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.001}
+            value={sectionRatio}
+            onChange={(event) => setSectionRatio(Number(event.target.value))}
+            className="w-full"
+            aria-label="Section position"
+          />
+        ) : null}
+      </div>
+      {contextMenu ? (
+        <div
+          ref={contextMenuRef}
+          className="fixed z-50 min-w-36 rounded-md border border-border bg-card py-1 text-[12px] shadow-lg"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            type="button"
+            className="block w-full px-3 py-1.5 text-left hover:bg-accent"
+            onClick={() => {
+              onShowAll()
+              setContextMenu(null)
+            }}
+          >
+            Show all
+          </button>
+          <button
+            type="button"
+            disabled={!contextMenu.hasSelection}
+            className="block w-full px-3 py-1.5 text-left hover:bg-accent disabled:opacity-40 disabled:hover:bg-transparent"
+            onClick={() => {
+              onHideSelected()
+              setContextMenu(null)
+            }}
+          >
+            Hide selected
+          </button>
+          <button
+            type="button"
+            disabled={!contextMenu.hasSelection}
+            className="block w-full px-3 py-1.5 text-left hover:bg-accent disabled:opacity-40 disabled:hover:bg-transparent"
+            onClick={() => {
+              onIsolateSelected()
+              setContextMenu(null)
+            }}
+          >
+            Isolate selected
+          </button>
+        </div>
       ) : null}
       {basketTotals ? (
         <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-md border border-border bg-card/95 px-3 py-2 text-[12px] shadow-lg backdrop-blur">

@@ -104,26 +104,6 @@ export function buildSpatialTreeFromStore(store: IfcDataStore): SpatialTreeNode 
   return convertNode(project, store)
 }
 
-export function findSpatialPath(root: SpatialTreeNode, expressId: number): number[] | null {
-  const path: number[] = []
-  const walk = (node: SpatialTreeNode): boolean => {
-    path.push(node.expressId)
-    if (node.expressId === expressId) return true
-    for (const child of node.children) {
-      if (walk(child)) return true
-    }
-    for (const group of node.elementGroups) {
-      if (group.ids.includes(expressId)) {
-        path.push(expressId)
-        return true
-      }
-    }
-    path.pop()
-    return false
-  }
-  return walk(root) ? path : null
-}
-
 export function spatialNodeMeta(type: IfcTypeEnum): { abbr: string; tone: string } {
   switch (type) {
     case IfcTypeEnum.IfcProject:

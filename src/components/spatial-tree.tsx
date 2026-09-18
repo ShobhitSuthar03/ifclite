@@ -1,12 +1,7 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import { ChevronRight, Search } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import {
-  findSpatialPath,
-  spatialNodeMeta,
-  type IfcDataStore,
-  type SpatialTreeNode,
-} from '@/lib/ifc-data'
+import { spatialNodeMeta, type IfcDataStore, type SpatialTreeNode } from '@/lib/ifc-data'
 import { elementTreeLabel } from '@/lib/element-label'
 import { collectNodeElementIds } from '@/lib/spatial-scope'
 import { isAdditiveModifier } from '@/lib/selection'
@@ -49,15 +44,10 @@ export function SpatialTree({
     setExpanded(next)
   }, [root])
 
+  // Selecting an element highlights it in the tree, but no longer force-expands
+  // ancestors to reveal it - only scrolls it into view if it's already visible.
   useEffect(() => {
     if (!root || selectedId == null) return
-    const path = findSpatialPath(root, selectedId)
-    if (!path) return
-    setExpanded((current) => {
-      const next = new Set(current)
-      for (const id of path) next.add(`n:${id}`)
-      return next
-    })
     requestAnimationFrame(() => {
       document.getElementById(`tree-${selectedId}`)?.scrollIntoView({ block: 'nearest' })
     })

@@ -90,6 +90,11 @@ export class ViewerBatchGroup {
     this.material.dispose()
   }
 
+  /** All batches share one material, so a section plane is one assignment. */
+  setClippingPlanes(planes: THREE.Plane[]) {
+    this.material.clippingPlanes = planes
+  }
+
   addRange(meshes: Array<{ positions: ArrayLike<number>; indices: ArrayLike<number>; origin?: ArrayLike<number>; color?: ArrayLike<number>; expressId: number }>, from: number, to: number) {
     const dirty = new Set<PackedBatch>()
     for (let i = from; i < to; i += 1) {
@@ -264,7 +269,7 @@ function createBatchMaterial(): THREE.MeshLambertMaterial {
          } else if (vElementState > 2.5 && vElementState < 3.5) {
            outgoingLight = mix(outgoingLight, vec3(1.0, 0.32, 0.02), 0.88);
          } else if (vElementState > 3.5) {
-           outgoingLight = mix(outgoingLight, vec3(1.0, 0.92, 0.35), 0.4);
+           outgoingLight = mix(outgoingLight, vec3(1.0), 0.18);
          }
          #include <opaque_fragment>`,
       )
