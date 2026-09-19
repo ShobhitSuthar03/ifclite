@@ -167,14 +167,18 @@ describe('computeElementQuantities', () => {
       indices[i + 1] = indices[i + 2]
       indices[i + 2] = swap
     }
+    const positions = new Float32Array(outer.positions.length + cavity.positions.length)
+    positions.set(outer.positions, 0)
+    positions.set(cavity.positions, outer.positions.length)
+    const cavityIndexOffset = outer.positions.length / 3
+    const combinedIndices = new Uint32Array(outer.indices.length + indices.length)
+    combinedIndices.set(outer.indices, 0)
+    for (let i = 0; i < indices.length; i += 1) combinedIndices[outer.indices.length + i] = indices[i] + cavityIndexOffset
     const hollow = {
       expressId: 10,
       ifcType: 'IfcColumn',
-      positions: new Float32Array([...outer.positions, ...cavity.positions]),
-      indices: new Uint32Array([
-        ...outer.indices,
-        ...Uint32Array.from(indices).map((index) => index + outer.positions.length / 3),
-      ]),
+      positions,
+      indices: combinedIndices,
     }
     const result = computeElementQuantities([hollow])
     almost(result.elements[0].metrics.VOLUME, 0.4 * 3 * 0.4 - 0.2 * 3 * 0.2)
