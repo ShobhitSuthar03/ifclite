@@ -149,6 +149,48 @@ export function pickIfcFileInBrowser(): Promise<LoadSource | null> {
   })
 }
 
+// Matches src-tauri's count_ifc_buildings command: a literal byte match on
+// "IFCBUILDING(", not a regex - the trailing paren excludes IFCBUILDINGSTOREY/
+// IFCBUILDINGELEMENTPROXY/etc without needing a word-boundary lookaround.
+const IFC_BUILDING_NEEDLE = new TextEncoder().encode('IFCBUILDING(')
+
+export function countIfcBuildingsInBytes(bytes: Uint8Array): number {
+  let count = 0
+  outer: for (let i = 0; i + IFC_BUILDING_NEEDLE.length <= bytes.length; i++) {
+    for (let j = 0; j < IFC_BUILDING_NEEDLE.length; j++) {
+      if (bytes[i + j] !== IFC_BUILDING_NEEDLE[j]) continue outer
+    }
+    count++
+  }
+  return count
+}
+
+/**
+ * The native pipeline's coordinate handling trusts each mesh batch's own
+ * "site-local" coordinates and skips the reconciliation pass the WASM
+ * pipeline always runs (@ifc-lite/geometry's CoordinateHandler:
+ * processTrustedMeshesIncremental vs. processMeshesIncremental). That's safe
+ * for the overwhelmingly common case of a single IfcBuilding, but a file
+ * merging multiple independent building/site trees (a multi-discipline
+ * federated export) can carry a different local coordinate baseline per
+ * building, and nothing reconciles them on the native fast path - elements
+ * from a non-primary building land in the wrong position, while WASM's
+ * per-batch validation doesn't have this gap. Route such files to WASM
+ * instead of native until the upstream engine's native path handles this
+ * itself.
+ */
+async function hasMultipleIfcBuildings(source: LoadSource): Promise<boolean> {
+  try {
+    if (source.bytes) return countIfcBuildingsInBytes(source.bytes) > 1
+    if (source.kind !== 'path') return false
+    const count = await invoke<number>('count_ifc_buildings', { path: source.path })
+    return count > 1
+  } catch (error) {
+    console.warn('[geometry] multi-building pre-check failed; continuing with the default pipeline', error)
+    return false
+  }
+}
+
 export async function loadIfcModel(
   source: LoadSource,
   onProgress: (progress: LoadProgress) => void,
@@ -181,6 +223,13 @@ export async function loadIfcModel(
     (bytes != null ? await sha256Hex(bytes) : await invoke<string>('hash_ifc_path', { path: path ?? '' }))
   const fileBytes =
     source.kind === 'buffer' ? source.bytes.byteLength : (source.sizeBytes ?? bytes?.byteLength ?? 0)
+  const useNative = isTauri() && !(await hasMultipleIfcBuildings(source))
+  if (isTauri() && !useNative) {
+    console.info(
+      '[geometry] file has more than one IfcBuilding; using the WASM pipeline instead of native ' +
+        '(the native path does not reconcile coordinates across multiple building/site roots)',
+    )
+  }
 
   let pipeline: LoadProgress['pipeline'] = 'wasm'
   let cacheHit = false
@@ -209,7 +258,7 @@ export async function loadIfcModel(
   }
 
   try {
-    if (isTauri()) {
+    if (useNative) {
       onProgress({
         phase: 'cache-lookup',
         processed: 0,

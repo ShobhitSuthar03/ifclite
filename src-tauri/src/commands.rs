@@ -85,6 +85,21 @@ pub fn read_ifc_bytes(path: String) -> Result<Response, String> {
     Ok(Response::new(bytes))
 }
 
+/// Counts top-level `IFCBUILDING(` entity declarations in a STEP file, read
+/// straight from disk as raw bytes (no UTF-8 decode, no parsing) so this stays
+/// cheap even for a multi-hundred-MB file. Used to decide whether to route a
+/// load through the native pipeline at all - see the caller in ifc-loader.ts
+/// for why a count above 1 forces a WASM fallback instead.
+#[tauri::command]
+pub fn count_ifc_buildings(path: String) -> Result<usize, String> {
+    let bytes = fs::read(&path).map_err(|err| format!("failed to read {path}: {err}"))?;
+    const NEEDLE: &[u8] = b"IFCBUILDING(";
+    if bytes.len() < NEEDLE.len() {
+        return Ok(0);
+    }
+    Ok(bytes.windows(NEEDLE.len()).filter(|window| *window == NEEDLE).count())
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalFileStat {
