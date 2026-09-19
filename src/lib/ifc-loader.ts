@@ -149,79 +149,6 @@ export function pickIfcFileInBrowser(): Promise<LoadSource | null> {
   })
 }
 
-// Matches src-tauri's analyze_ifc_for_pipeline_choice command: a literal byte
-// match on "IFCBUILDING(", not a regex - the trailing paren excludes
-// IFCBUILDINGSTOREY/IFCBUILDINGELEMENTPROXY/etc without needing a
-// word-boundary lookaround.
-const IFC_BUILDING_NEEDLE = new TextEncoder().encode('IFCBUILDING(')
-
-export function countIfcBuildingsInBytes(bytes: Uint8Array): number {
-  let count = 0
-  outer: for (let i = 0; i + IFC_BUILDING_NEEDLE.length <= bytes.length; i++) {
-    for (let j = 0; j < IFC_BUILDING_NEEDLE.length; j++) {
-      if (bytes[i + j] !== IFC_BUILDING_NEEDLE[j]) continue outer
-    }
-    count++
-  }
-  return count
-}
-
-// Mirrors the Rust command's LARGE_COORDINATE_THRESHOLD_MM - see its comment
-// for why this stays unit-agnostic in practice.
-const LARGE_COORDINATE_THRESHOLD_MM = 10_000_000
-
-export function hasLargeCoordinatesInBytes(bytes: Uint8Array): boolean {
-  const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
-  const needle = 'IFCCARTESIANPOINT(('
-  let from = 0
-  for (;;) {
-    const start = text.indexOf(needle, from)
-    if (start === -1) return false
-    const numbersStart = start + needle.length
-    const end = text.indexOf('))', numbersStart)
-    if (end === -1) return false
-    const numbers = text.slice(numbersStart, end).split(',')
-    for (const token of numbers) {
-      const value = Number(token.trim())
-      if (Number.isFinite(value) && Math.abs(value) > LARGE_COORDINATE_THRESHOLD_MM) return true
-    }
-    from = end + 2
-  }
-}
-
-/**
- * The native pipeline's coordinate handling trusts each mesh batch's own
- * "site-local" coordinates and skips the reconciliation pass the WASM
- * pipeline always runs (@ifc-lite/geometry's CoordinateHandler:
- * processTrustedMeshesIncremental vs. processMeshesIncremental). That's safe
- * for the overwhelmingly common case of a single IfcBuilding with ordinary
- * local coordinates, but two real cases have shown otherwise: a file merging
- * multiple independent building/site trees (each potentially carrying its
- * own local coordinate baseline), and a file whose site placement bakes in a
- * real-world "shared coordinates" survey point (tens of thousands of metres
- * from the origin) - Revit exports both without warning. Neither gets
- * reconciled on the native fast path, so affected elements land in the wrong
- * position; WASM's per-batch validation doesn't have this gap. Route such
- * files to WASM instead of native until the upstream engine's native path
- * handles this itself.
- */
-async function shouldAvoidNativePipeline(source: LoadSource): Promise<boolean> {
-  try {
-    if (source.bytes) {
-      return countIfcBuildingsInBytes(source.bytes) > 1 || hasLargeCoordinatesInBytes(source.bytes)
-    }
-    if (source.kind !== 'path') return false
-    const risk = await invoke<{ buildingCount: number; hasLargeCoordinates: boolean }>(
-      'analyze_ifc_for_pipeline_choice',
-      { path: source.path },
-    )
-    return risk.buildingCount > 1 || risk.hasLargeCoordinates
-  } catch (error) {
-    console.warn('[geometry] native-pipeline risk pre-check failed; continuing with the default pipeline', error)
-    return false
-  }
-}
-
 export async function loadIfcModel(
   source: LoadSource,
   onProgress: (progress: LoadProgress) => void,
@@ -254,13 +181,6 @@ export async function loadIfcModel(
     (bytes != null ? await sha256Hex(bytes) : await invoke<string>('hash_ifc_path', { path: path ?? '' }))
   const fileBytes =
     source.kind === 'buffer' ? source.bytes.byteLength : (source.sizeBytes ?? bytes?.byteLength ?? 0)
-  const useNative = isTauri() && !(await shouldAvoidNativePipeline(source))
-  if (isTauri() && !useNative) {
-    console.info(
-      '[geometry] file has multiple IfcBuilding roots and/or a real-world-scale coordinate; ' +
-        'using the WASM pipeline instead of native (the native path does not reconcile these cases)',
-    )
-  }
 
   let pipeline: LoadProgress['pipeline'] = 'wasm'
   let cacheHit = false
@@ -289,7 +209,7 @@ export async function loadIfcModel(
   }
 
   try {
-    if (useNative) {
+    if (isTauri()) {
       onProgress({
         phase: 'cache-lookup',
         processed: 0,
