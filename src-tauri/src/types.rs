@@ -10,6 +10,13 @@ pub struct NativeMeshData {
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
     pub color: [f32; 4],
+    /// Per-mesh local origin (world frame, f64); `positions` are stored
+    /// relative to this. `[0, 0, 0]` when the engine didn't shift this mesh.
+    /// Mirrors `ifc_lite_processing::MeshData.origin` — dropping it here was
+    /// the desktop-only element-misplacement bug (elements with a non-zero
+    /// engine-assigned origin rendered at `positions` alone, i.e. shifted by
+    /// the discarded origin vector).
+    pub origin: [f64; 3],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +93,8 @@ pub struct NativePackedMeshRange {
     pub indices_offset: usize,
     pub indices_len: usize,
     pub color: [f32; 4],
+    /// See `NativeMeshData::origin`.
+    pub origin: [f64; 3],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

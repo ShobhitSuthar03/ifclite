@@ -15,7 +15,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 hex = "0.4"
-ifc-lite-processing = "7.1"
+ifc-lite-processing = "15.1"
 once_cell = "1"
 parking_lot = "0.12"
 rand = "0.8"

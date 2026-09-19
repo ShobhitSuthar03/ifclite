@@ -1610,9 +1610,9 @@ dependencies = [
 
 [[package]]
 name = "ifc-lite-core"
-version = "7.1.0"
+version = "15.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60904a9637ec7c136c632217fbd19e1435d7625b2e2bc0c50d7b07cf0146de69"
+checksum = "e02f869615c681e4776a6211c834b31f209cd61beba243ff9ad1d6f64a7b8c42"
 dependencies = [
  "fast-float2",
  "futures-core",
@@ -1627,9 +1627,9 @@ dependencies = [
 
 [[package]]
 name = "ifc-lite-geometry"
-version = "7.1.0"
+version = "15.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6648471b82cf7f6069e2f4c02fd317892a21573dc805dd82f4ae0827c84a3794"
+checksum = "5b6553b8d3310ceab9b81ce72eb392468db524af58e365ef58ec23fb076e0e2e"
 dependencies = [
  "bnum",
  "earcutr",
@@ -1651,17 +1651,20 @@ dependencies = [
 
 [[package]]
 name = "ifc-lite-processing"
-version = "7.1.0"
+version = "15.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75c11d2d6c99e410ffadfed79193d45809665db50afeabd89bb4ab350e84d7eb"
+checksum = "9b10f3f0668bc45e70f697c61dd01d031433edd75a89f4871386c953fca1ceb0"
 dependencies = [
  "ifc-lite-core",
  "ifc-lite-geometry",
  "memchr",
+ "nalgebra",
+ "png 0.18.1",
  "rayon",
  "rustc-hash",
  "serde",
  "serde_json",
+ "sha2",
  "tracing",
 ]
 
