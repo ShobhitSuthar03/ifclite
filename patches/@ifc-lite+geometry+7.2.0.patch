@@ -1,0 +1,92 @@
+diff --git a/node_modules/@ifc-lite/geometry/dist/native-bridge-conversion.d.ts b/node_modules/@ifc-lite/geometry/dist/native-bridge-conversion.d.ts
+index 6ba05d8..079af65 100644
+--- a/node_modules/@ifc-lite/geometry/dist/native-bridge-conversion.d.ts
++++ b/node_modules/@ifc-lite/geometry/dist/native-bridge-conversion.d.ts
+@@ -13,6 +13,7 @@ export interface NativeMeshData {
+     normals: number[];
+     indices: number[];
+     color: [number, number, number, number];
++    origin?: [number, number, number];
+ }
+ export interface NativePackedMeshRange {
+     expressId: number;
+@@ -24,6 +25,7 @@ export interface NativePackedMeshRange {
+     indicesOffset: number;
+     indicesLen: number;
+     color: [number, number, number, number];
++    origin?: [number, number, number];
+ }
+ export interface NativePackedGeometryBatch {
+     meshes: NativePackedMeshRange[];
+diff --git a/node_modules/@ifc-lite/geometry/dist/native-bridge-conversion.js b/node_modules/@ifc-lite/geometry/dist/native-bridge-conversion.js
+index bff6a0b..f9d6d87 100644
+--- a/node_modules/@ifc-lite/geometry/dist/native-bridge-conversion.js
++++ b/node_modules/@ifc-lite/geometry/dist/native-bridge-conversion.js
+@@ -9,6 +9,7 @@ export function convertNativeMesh(native) {
+         normals: new Float32Array(native.normals),
+         indices: new Uint32Array(native.indices),
+         color: native.color,
++        origin: native.origin,
+     };
+ }
+ /**
+@@ -57,6 +58,7 @@ export function convertPackedNativeBatch(native) {
+             normals: normals.subarray(mesh.normalsOffset, mesh.normalsOffset + mesh.normalsLen),
+             indices: indices.subarray(mesh.indicesOffset, mesh.indicesOffset + mesh.indicesLen),
+             color: mesh.color,
++            origin: mesh.origin,
+         };
+     });
+ }
+diff --git a/node_modules/@ifc-lite/geometry/dist/packed-geometry-decoder.js b/node_modules/@ifc-lite/geometry/dist/packed-geometry-decoder.js
+index 70e7294..c1c11d4 100644
+--- a/node_modules/@ifc-lite/geometry/dist/packed-geometry-decoder.js
++++ b/node_modules/@ifc-lite/geometry/dist/packed-geometry-decoder.js
+@@ -29,8 +29,9 @@ export function toArrayBuffer(payload) {
+  * Binary layout (all little-endian uint32 unless noted):
+  *   Header (8 words): magic, version, meshCount, positionsLen, normalsLen,
+  *                      indicesLen, processed, total
+- *   Mesh table (meshCount * 11 words each): expressId, posOff, posLen, nrmOff,
+- *                      nrmLen, idxOff, idxLen, color(r,g,b,a as float32)
++ *   Mesh table: expressId, posOff, posLen, nrmOff, nrmLen, idxOff, idxLen,
++ *                      color(r,g,b,a as float32) — 11 words (v1), plus
++ *                      origin(x,y,z as float64) — 17 words total (v2+).
+  *   Data: positions (Float32), normals (Float32), indices (Uint32)
+  */
+ export function decodePackedGeometryCacheShard(payload, jsReceivedTimeMs, batchSequence) {
+@@ -44,10 +45,11 @@ export function decodePackedGeometryCacheShard(payload, jsReceivedTimeMs, batchS
+     if (magic !== 0x49464342) {
+         throw new Error('Invalid packed geometry cache shard magic');
+     }
+-    if (version !== 1) {
++    if (version !== 1 && version !== 2) {
+         throw new Error(`Unsupported packed geometry cache shard version: ${version}`);
+     }
+-    const meshRecordWordLength = 11;
++    const hasOrigin = version >= 2;
++    const meshRecordWordLength = hasOrigin ? 17 : 11;
+     const meshWordOffset = 8;
+     const meshTableWords = meshCount * meshRecordWordLength;
+     const dataByteOffset = (meshWordOffset + meshTableWords) * Uint32Array.BYTES_PER_ELEMENT;
+@@ -81,6 +83,13 @@ export function decodePackedGeometryCacheShard(payload, jsReceivedTimeMs, batchS
+             meshView.getFloat32(base + 36, true),
+             meshView.getFloat32(base + 40, true),
+         ];
++        const origin = hasOrigin
++            ? [
++                meshView.getFloat64(base + 44, true),
++                meshView.getFloat64(base + 52, true),
++                meshView.getFloat64(base + 60, true),
++            ]
++            : [0, 0, 0];
+         // Validate each mesh's pool ranges before subarray — a malformed/wrapped
+         // offset would otherwise silently clip (subarray saturates), yielding
+         // truncated-or-borrowed geometry indistinguishable from a real mesh
+@@ -96,6 +105,7 @@ export function decodePackedGeometryCacheShard(payload, jsReceivedTimeMs, batchS
+             normals: normals.subarray(normalsOffsetWords, normalsOffsetWords + normalsLengthWords),
+             indices: indices.subarray(indicesOffsetWords, indicesOffsetWords + indicesLengthWords),
+             color,
++            origin,
+         });
+     }
+     return {

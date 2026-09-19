@@ -5,8 +5,10 @@ use crate::types::{
 use ifc_lite_processing::MeshData;
 
 pub const PACKED_MAGIC: u32 = 0x4946_4342;
-pub const PACKED_VERSION: u32 = 1;
-const MESH_RECORD_WORDS: usize = 11;
+// v2 adds a per-mesh f64 origin (6 extra words per mesh record) — see
+// NativeMeshData::origin for why dropping it was a real bug, not cosmetic.
+pub const PACKED_VERSION: u32 = 2;
+const MESH_RECORD_WORDS: usize = 17;
 
 pub fn native_mesh_from_processing(mesh: &MeshData) -> NativeMeshData {
     NativeMeshData {
@@ -20,6 +22,7 @@ pub fn native_mesh_from_processing(mesh: &MeshData) -> NativeMeshData {
         normals: mesh.normals.clone(),
         indices: mesh.indices.clone(),
         color: mesh.color,
+        origin: mesh.origin,
     }
 }
 
@@ -48,6 +51,7 @@ pub fn pack_meshes(
             indices_offset: indices.len(),
             indices_len: native.indices.len(),
             color: native.color,
+            origin: native.origin,
         });
         positions.extend_from_slice(&native.positions);
         normals.extend_from_slice(&native.normals);
@@ -107,6 +111,9 @@ pub fn encode_packed_shard(batch: &NativePackedGeometryBatch) -> Vec<u8> {
         write_f32(&mut bytes, &mut offset, mesh.color[1]);
         write_f32(&mut bytes, &mut offset, mesh.color[2]);
         write_f32(&mut bytes, &mut offset, mesh.color[3]);
+        write_f64(&mut bytes, &mut offset, mesh.origin[0]);
+        write_f64(&mut bytes, &mut offset, mesh.origin[1]);
+        write_f64(&mut bytes, &mut offset, mesh.origin[2]);
     }
 
     for value in &batch.positions {
@@ -130,6 +137,11 @@ fn write_u32(bytes: &mut [u8], offset: &mut usize, value: u32) {
 fn write_f32(bytes: &mut [u8], offset: &mut usize, value: f32) {
     bytes[*offset..*offset + 4].copy_from_slice(&value.to_le_bytes());
     *offset += 4;
+}
+
+fn write_f64(bytes: &mut [u8], offset: &mut usize, value: f64) {
+    bytes[*offset..*offset + 8].copy_from_slice(&value.to_le_bytes());
+    *offset += 8;
 }
 
 #[cfg(test)]
