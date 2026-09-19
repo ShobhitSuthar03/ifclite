@@ -6,7 +6,7 @@ export {
   isColumnType,
   type ElementVolume,
 } from '@/lib/geometry-qto/faces'
-export { computeColumnFormwork, computeElementQuantities, filterFormwork, filterQuantities, hydrateFacePositions, mergeQuantityElements } from '@/lib/geometry-qto/formwork'
+export { computeColumnFormwork, computeElementQuantities, filterQuantities, hydrateFacePositions, mergeQuantityElements } from '@/lib/geometry-qto/formwork'
 export { meshesForQuantityIndex, meshesForQuantityJob, typeQtoMeshes } from '@/lib/geometry-qto/job'
 export {
   encodeStoredQuantities,

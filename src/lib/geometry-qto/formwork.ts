@@ -260,8 +260,6 @@ export function filterQuantities(result: QuantityResult, keepIds: Set<number> | 
   return mergeQuantityElements(elements)
 }
 
-export const filterFormwork = filterQuantities
-
 /** Combine per-element rows (e.g. chunked whole-model passes) into one takeoff. */
 export function mergeQuantityElements(elements: ElementQuantity[]): QuantityResult {
   const byId = new Map<number, ElementQuantity>()
