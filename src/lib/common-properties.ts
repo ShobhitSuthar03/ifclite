@@ -1,5 +1,16 @@
 import type { EntityData } from '@/lib/ifc-data'
 
+/**
+ * Above this many selected elements, skip per-entity property/quantity
+ * extraction. Each entity's properties/quantities are extracted on demand by
+ * re-parsing raw STEP bytes with no cross-entity cache (see
+ * `getEntityData`/`extractPropertiesOnDemand`), so doing that for thousands
+ * of ids at once (e.g. selecting an entire spatial-tree branch) blocks the
+ * UI for seconds. The common-properties summary isn't very actionable at
+ * that scale anyway.
+ */
+export const MAX_DETAILED_MULTI_SELECT = 300
+
 export type CommonPropertyRow = {
   group: string
   name: string

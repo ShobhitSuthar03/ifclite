@@ -51,10 +51,6 @@ export function isIfcTypeRef(ref: PropertyRef): boolean {
   return ref.kind === 'attribute' && ref.name === 'IFC Type'
 }
 
-export function filterRulesNeedParse(rules: PropertyRef[]): boolean {
-  return rules.some((rule) => !isIfcTypeRef(rule))
-}
-
 export function addFilterRule(rules: PropertyRef[], ref: PropertyRef): PropertyRef[] {
   if (rules.some((rule) => samePropertyRef(rule, ref))) return rules
   if (rules.length >= MAX_FILTER_RULES) return rules

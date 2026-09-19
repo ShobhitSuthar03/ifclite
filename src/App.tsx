@@ -16,6 +16,7 @@ import { EstimationPanel } from '@/components/estimation-panel'
 import { AssemblyBuildUp } from '@/components/assembly-buildup'
 import { ElementCostCard } from '@/components/element-cost-card'
 import { ESTIMATION_ENABLED } from '@/lib/feature-flags'
+import { MAX_DETAILED_MULTI_SELECT } from '@/lib/common-properties'
 import {
   buildDataStore,
   buildSpatialTreeFromStore,
@@ -1700,12 +1701,29 @@ export default function App() {
     if (selectedIds.size === 0) return []
     if (selectedIds.size === 1 && entity && selectedIds.has(entity.expressId)) return [entity]
     const typeById = new Map(selectedMeshes.map((mesh) => [mesh.expressId, mesh.ifcType]))
+    // Above the threshold, skip the per-entity property/quantity extraction
+    // (each call re-parses raw STEP bytes with no cache) and only resolve
+    // the cheap, pre-indexed type/name - see MAX_DETAILED_MULTI_SELECT.
+    const detailed = selectedIds.size <= MAX_DETAILED_MULTI_SELECT
     return [...selectedIds].map((id) => {
       const type =
         typeById.get(id) ??
         store?.entities.getTypeName(id) ??
         warehouseLookup?.get(id)?.ifcType ??
         'IfcProduct'
+      if (!detailed) {
+        return {
+          expressId: id,
+          ifcType: type,
+          globalId: '',
+          name: store?.entities.getName(id) ?? warehouseLookup?.get(id)?.name ?? '',
+          description: '',
+          objectType: '',
+          tag: '',
+          propertySets: [],
+          quantitySets: [],
+        }
+      }
       const base = readEntity(store, warehouse, id, type)
       return mutationView ? overlayEntityData(base, mutationView) : base
     })
@@ -1765,12 +1783,14 @@ export default function App() {
     if (filterRules.length === 0) return []
     const raw = warehouse
       ? buildWarehousePropertyTree(warehouse, filterRules, spec)
-      : filterRules.length === 1 && isIfcTypeRef(filterRules[0])
+      : (!store || parsing) && filterRules.length === 1 && isIfcTypeRef(filterRules[0])
         ? uniqueIfcTypeTree(geometryStore.list())
         : storeFilterTree
     return filterColorize ? colorizeLeaves(raw) : raw
   }, [
     warehouse,
+    store,
+    parsing,
     filterRules,
     spec,
     leftTab,
@@ -1820,7 +1840,7 @@ export default function App() {
   useEffect(() => {
     if (warehouse) return
     if (leftTab !== 'filters' && mobileTab !== 'filters' && !filterColorize) return
-    if (!store || filterRules.length === 0 || (filterRules.length === 1 && isIfcTypeRef(filterRules[0]))) {
+    if (!store || parsing || filterRules.length === 0) {
       setStoreFilterTree([])
       return
     }
@@ -1845,7 +1865,7 @@ export default function App() {
       cancelled = true
       cancelAnimationFrame(frame)
     }
-  }, [warehouse, store, filterRules, leftTab, mobileTab, filterColorize, allExpressIds, mutationTick, mutationPatches])
+  }, [warehouse, store, parsing, filterRules, leftTab, mobileTab, filterColorize, allExpressIds, mutationTick, mutationPatches])
 
   const estimationSheet = useMemo(() => activeBoq(estimation), [estimation])
   const estimationGroupBy = estimationSheet.groupBy
@@ -1854,11 +1874,7 @@ export default function App() {
       setEstimationStoreTree((current) => (current.length === 0 ? current : []))
       return
     }
-    if (estimationGroupBy.length === 1 && isIfcTypeRef(estimationGroupBy[0])) {
-      setEstimationStoreTree((current) => (current.length === 0 ? current : []))
-      return
-    }
-    if (!store) {
+    if (!store || parsing) {
       setEstimationStoreTree((current) => (current.length === 0 ? current : []))
       return
     }
@@ -1886,6 +1902,7 @@ export default function App() {
   }, [
     warehouse,
     store,
+    parsing,
     estimationUiOpen,
     estimationGroupBy,
     allExpressIds,
@@ -1901,7 +1918,7 @@ export default function App() {
   const estimationPreviewTree = useMemo(() => {
     if (!estimationUiOpen || estimationGroupBy.length === 0) return []
     if (warehouse) return buildWarehousePropertyTree(warehouse, estimationGroupBy, spec)
-    if (estimationGroupBy.length === 1 && isIfcTypeRef(estimationGroupBy[0])) {
+    if ((!store || parsing) && estimationGroupBy.length === 1 && isIfcTypeRef(estimationGroupBy[0])) {
       return uniqueIfcTypeTree(geometryStore.list())
     }
     return estimationStoreTree
@@ -1909,6 +1926,8 @@ export default function App() {
     estimationUiOpen,
     estimationGroupBy,
     warehouse,
+    store,
+    parsing,
     spec,
     estimationStoreTree,
     geometryStore,

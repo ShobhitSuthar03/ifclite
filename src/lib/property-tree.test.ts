@@ -6,7 +6,6 @@ import {
   ATTRIBUTE_IFC_TYPE,
   ATTRIBUTE_STOREY,
   addFilterRule,
-  filterRulesNeedParse,
   findPropertyNode,
   moveFilterRule,
   nestByValues,
@@ -63,8 +62,6 @@ describe('property tree', () => {
     expect(moveFilterRule(nested, 0, 1)).toEqual([ATTRIBUTE_STOREY, ATTRIBUTE_IFC_TYPE])
     expect(promoteFilterRule(nested, ATTRIBUTE_STOREY)).toEqual([ATTRIBUTE_STOREY, ATTRIBUTE_IFC_TYPE])
     expect(promoteFilterRule(nested, ATTRIBUTE_IFC_TYPE)).toEqual(nested)
-    expect(filterRulesNeedParse(first)).toBe(false)
-    expect(filterRulesNeedParse(nested)).toBe(true)
     expect(parsePropertyRefs([{ set: 'Pset', name: 'Level', kind: 'property' }, { name: 'bad' }])).toEqual([
       { set: 'Pset', name: 'Level', kind: 'property' },
     ])

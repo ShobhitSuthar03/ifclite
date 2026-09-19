@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import type { EntityData } from '@/lib/ifc-data'
 import { AREA_FIELDS, PERIMETER_FIELDS, STANDARD_FIELDS, type AreaMetrics } from '@/lib/geometry-qto'
-import { commonProperties, selectionTypeLabel, type CommonPropertyRow } from '@/lib/common-properties'
+import { MAX_DETAILED_MULTI_SELECT, commonProperties, selectionTypeLabel, type CommonPropertyRow } from '@/lib/common-properties'
 import { cn, formatCount } from '@/lib/utils'
 
 export type PropertyScope = 'selected' | 'model'
@@ -184,6 +184,13 @@ export function PropertiesPanel({
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-3 px-3 pb-3">
+          {multi && entities.length > MAX_DETAILED_MULTI_SELECT ? (
+            <p className="rounded border border-border bg-muted/50 p-2 text-[11px] text-muted-foreground">
+              {formatCount(entities.length)} elements selected — too many to summarize property/quantity values.
+              Narrow the selection to see common properties. Editing attributes still applies to every selected
+              element.
+            </p>
+          ) : null}
           {multi ? (
             filteredCommonGroups.map(([group, rows]) => (
               <PsetGroup key={group} name={group} open={isGroupOpen(group)} onToggle={() => toggleGroup(group)}>
