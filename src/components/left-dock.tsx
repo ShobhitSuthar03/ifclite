@@ -1,20 +1,23 @@
-import { Filter, ListTree, BarChart3 } from 'lucide-react'
+import { Filter, ListTree, BarChart3, Hash } from 'lucide-react'
 import { FilterBar } from '@/components/filter-bar'
 import { ReportsPanel } from '@/components/reports-panel'
 import { PanelTabs } from '@/components/panel-tabs'
 import { SpatialTree } from '@/components/spatial-tree'
-import type { FilterOptions, GroupByField, MetricField, PropertyCatalogSet, ReportFilter, ReportTemplate } from '@/lib/bim-sql'
+import { GuidSearch } from '@/components/guid-search'
+import type { BimDatabase, FilterOptions, GroupByField, MetricField, PropertyCatalogSet, ReportFilter, ReportTemplate } from '@/lib/bim-sql'
 import type { IfcDataStore, SpatialTreeNode } from '@/lib/ifc-data'
 import type { QuerySpec } from '@/lib/ifc-query'
 import type { PropertyRef, PropertyTreeNode } from '@/lib/property-tree'
 
-export type LeftTab = 'tree' | 'filters' | 'reports'
+export type LeftTab = 'tree' | 'filters' | 'reports' | 'guids'
 
 type LeftDockProps = {
   tab: LeftTab
   onTabChange: (tab: LeftTab) => void
   root: SpatialTreeNode | null
   store: IfcDataStore | null
+  warehouse: BimDatabase | null
+  onCopySelectedGlobalIds: () => string[]
   selectedId: number | null
   selectedIds: Set<number>
   isolatedIds: Set<number> | null
@@ -57,6 +60,8 @@ export function LeftDock({
   onTabChange,
   root,
   store,
+  warehouse,
+  onCopySelectedGlobalIds,
   selectedId,
   selectedIds,
   isolatedIds,
@@ -123,6 +128,7 @@ export function LeftDock({
             { id: 'tree', label: 'Tree', icon: <ListTree className="h-3.5 w-3.5" /> },
             { id: 'filters', label: 'Filters', icon: <Filter className="h-3.5 w-3.5" /> },
             { id: 'reports', label: 'Reports', icon: <BarChart3 className="h-3.5 w-3.5" /> },
+            { id: 'guids', label: 'GUIDs', icon: <Hash className="h-3.5 w-3.5" /> },
           ]}
         />
       )}
@@ -137,6 +143,14 @@ export function LeftDock({
             parsing={parsing}
             embedded
             onSelect={onSelect}
+            onSelectScope={onSelectScope}
+          />
+        ) : tab === 'guids' ? (
+          <GuidSearch
+            store={store}
+            warehouse={warehouse}
+            hasSelection={selectedIds.size > 0}
+            onCopySelected={onCopySelectedGlobalIds}
             onSelectScope={onSelectScope}
           />
         ) : tab === 'reports' ? (

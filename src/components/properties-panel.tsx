@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Check, ChevronDown, Pencil, Plus, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronsDownUp, ChevronsUpDown, Pencil, Plus, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import type { EntityData } from '@/lib/ifc-data'
@@ -51,10 +51,64 @@ export function PropertiesPanel({
   const common = useMemo(() => (multi ? commonProperties(entities) : []), [entities, multi])
   const canMutate = Boolean(onEditAttribute || onEditProperty)
   const [editMode, setEditMode] = useState(false)
+  const [propertySearch, setPropertySearch] = useState('')
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set())
   const selectionKey = entities.map((item) => item.expressId).join(',')
   useEffect(() => {
     setEditMode(false)
+    setPropertySearch('')
+    setCollapsedGroups(new Set())
   }, [selectionKey])
+
+  const searchNeedle = propertySearch.trim().toLowerCase()
+  const searching = searchNeedle.length > 0
+  // Searching auto-expands every group so matches are visible without also
+  // fighting the user's own collapse choices - those choices just resume
+  // once the search is cleared.
+  const isGroupOpen = (name: string) => searching || !collapsedGroups.has(name)
+  const toggleGroup = (name: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
+
+  const groupedCommon = useMemo(() => groupRows(common), [common])
+  const filteredPropertySets = useMemo(() => {
+    if (!primary) return []
+    return filterSets(primary.propertySets, searchNeedle, (set) => set.properties, (property) => property.name)
+  }, [primary, searchNeedle])
+  const filteredQuantitySets = useMemo(() => {
+    if (!primary) return []
+    return filterSets(primary.quantitySets, searchNeedle, (set) => set.quantities, (quantity) => quantity.name)
+  }, [primary, searchNeedle])
+  const filteredCommonGroups = useMemo(() => {
+    if (!searching) return groupedCommon
+    return groupedCommon
+      .map(([group, rows]): [string, CommonPropertyRow[]] => [
+        group,
+        group.toLowerCase().includes(searchNeedle) ? rows : rows.filter((row) => row.name.toLowerCase().includes(searchNeedle)),
+      ])
+      .filter(([, rows]) => rows.length > 0)
+  }, [groupedCommon, searching, searchNeedle])
+
+  const allGroupNames = useMemo(() => {
+    const names: string[] = []
+    if (!primary) return names
+    if (multi) {
+      for (const [group] of groupedCommon) names.push(group)
+    } else {
+      names.push('Attributes', ...primary.propertySets.map((set) => set.name), ...primary.quantitySets.map((set) => set.name))
+    }
+    names.push('Geometry')
+    if (computedMetrics) {
+      names.push('Standard quantities (geometry)', 'Computed areas (geometry)', 'Computed perimeters (geometry)')
+    }
+    return names
+  }, [primary, multi, groupedCommon, computedMetrics])
+  const allCollapsed = allGroupNames.length > 0 && allGroupNames.every((name) => collapsedGroups.has(name))
 
   const addPropertyForm = onAddProperty ? (
     <AddPropertyForm selectionCount={entities.length} modelElementCount={modelElementCount} onAdd={onAddProperty} />
@@ -107,11 +161,32 @@ export function PropertiesPanel({
           <X />
         </Button>
       </div>
+      <div className="flex items-center gap-1.5 px-3 pb-2">
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute top-1/2 left-2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            className="h-7 w-full rounded border border-border bg-background pr-2 pl-7 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            placeholder="Search property or property set…"
+            value={propertySearch}
+            onChange={(event) => setPropertySearch(event.target.value)}
+          />
+        </div>
+        <Button
+          variant="outline"
+          size="icon"
+          className="h-7 w-7 shrink-0"
+          disabled={allGroupNames.length === 0}
+          title={allCollapsed ? 'Expand all' : 'Collapse all'}
+          onClick={() => setCollapsedGroups(allCollapsed ? new Set() : new Set(allGroupNames))}
+        >
+          {allCollapsed ? <ChevronsUpDown className="h-3.5 w-3.5" /> : <ChevronsDownUp className="h-3.5 w-3.5" />}
+        </Button>
+      </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-3 px-3 pb-3">
           {multi ? (
-            groupRows(common).map(([group, rows]) => (
-              <PsetGroup key={group} name={group} defaultOpen>
+            filteredCommonGroups.map(([group, rows]) => (
+              <PsetGroup key={group} name={group} open={isGroupOpen(group)} onToggle={() => toggleGroup(group)}>
                 {rows.map((row) => (
                   <PropertyValue
                     key={`${row.group}-${row.name}`}
@@ -124,7 +199,7 @@ export function PropertiesPanel({
               </PsetGroup>
             ))
           ) : (
-            <PsetGroup name="Attributes" defaultOpen>
+            <PsetGroup name="Attributes" open={isGroupOpen('Attributes')} onToggle={() => toggleGroup('Attributes')}>
               <Row label="GlobalId" value={primary.globalId} />
               <EditableRow
                 key={`${primary.expressId}-Name-${mutationCount}-${editMode}`}
@@ -156,14 +231,18 @@ export function PropertiesPanel({
               />
             </PsetGroup>
           )}
-          <PsetGroup name="Geometry" defaultOpen>
+          <PsetGroup name="Geometry" open={isGroupOpen('Geometry')} onToggle={() => toggleGroup('Geometry')}>
             <Row label="Meshes" value={formatCount(meshCount)} />
             <Row label="Vertices" value={formatCount(vertices)} />
             <Row label="Triangles" value={formatCount(triangles)} />
           </PsetGroup>
           {computedMetrics ? (
             <>
-              <PsetGroup name="Standard quantities (geometry)" defaultOpen>
+              <PsetGroup
+                name="Standard quantities (geometry)"
+                open={isGroupOpen('Standard quantities (geometry)')}
+                onToggle={() => toggleGroup('Standard quantities (geometry)')}
+              >
                 {STANDARD_FIELDS.map((field) => (
                   <Row
                     key={field.key}
@@ -176,7 +255,11 @@ export function PropertiesPanel({
                   />
                 ))}
               </PsetGroup>
-              <PsetGroup name="Computed areas (geometry)" defaultOpen>
+              <PsetGroup
+                name="Computed areas (geometry)"
+                open={isGroupOpen('Computed areas (geometry)')}
+                onToggle={() => toggleGroup('Computed areas (geometry)')}
+              >
                 {AREA_FIELDS.map((field) => (
                   <Row
                     key={field.key}
@@ -185,7 +268,11 @@ export function PropertiesPanel({
                   />
                 ))}
               </PsetGroup>
-              <PsetGroup name="Computed perimeters (geometry)" defaultOpen>
+              <PsetGroup
+                name="Computed perimeters (geometry)"
+                open={isGroupOpen('Computed perimeters (geometry)')}
+                onToggle={() => toggleGroup('Computed perimeters (geometry)')}
+              >
                 {PERIMETER_FIELDS.map((field) => (
                   <Row
                     key={field.key}
@@ -196,13 +283,15 @@ export function PropertiesPanel({
               </PsetGroup>
             </>
           ) : null}
-          {!multi && primary.propertySets.length === 0 ? (
-            <p className="text-[11px] text-muted-foreground italic">No property sets</p>
+          {!multi && filteredPropertySets.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground italic">
+              {searching ? 'No matching properties' : 'No property sets'}
+            </p>
           ) : null}
           {!multi &&
-            primary.propertySets.map((set) => (
-              <PsetGroup key={set.name} name={set.name} defaultOpen>
-                {set.properties.map((property) => (
+            filteredPropertySets.map(({ set, items }) => (
+              <PsetGroup key={set.name} name={set.name} open={isGroupOpen(set.name)} onToggle={() => toggleGroup(set.name)}>
+                {items.map((property) => (
                   <EditableRow
                     key={`${primary.expressId}-${set.name}-${property.name}-${mutationCount}-${editMode}`}
                     label={property.name}
@@ -213,13 +302,15 @@ export function PropertiesPanel({
                 ))}
               </PsetGroup>
             ))}
-          {!multi && primary.quantitySets.length === 0 ? (
-            <p className="text-[11px] text-muted-foreground italic">No quantity sets</p>
+          {!multi && filteredQuantitySets.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground italic">
+              {searching ? 'No matching quantities' : 'No quantity sets'}
+            </p>
           ) : null}
           {!multi &&
-            primary.quantitySets.map((set) => (
-              <PsetGroup key={set.name} name={set.name} defaultOpen>
-                {set.quantities.map((quantity) => (
+            filteredQuantitySets.map(({ set, items }) => (
+              <PsetGroup key={set.name} name={set.name} open={isGroupOpen(set.name)} onToggle={() => toggleGroup(set.name)}>
+                {items.map((quantity) => (
                   <Row key={quantity.name} label={quantity.name} value={quantity.value} />
                 ))}
               </PsetGroup>
@@ -328,6 +419,24 @@ function AddPropertyForm({
   )
 }
 
+/** A set (property or quantity set) matches if its own name matches, showing
+ * all its items, or if only some of its items match by name. */
+function filterSets<TSet extends { name: string }, TItem>(
+  sets: TSet[],
+  needle: string,
+  itemsOf: (set: TSet) => TItem[],
+  nameOf: (item: TItem) => string,
+): Array<{ set: TSet; items: TItem[] }> {
+  return sets
+    .map((set) => {
+      const items = itemsOf(set)
+      if (!needle) return { set, items }
+      const setMatches = set.name.toLowerCase().includes(needle)
+      return { set, items: setMatches ? items : items.filter((item) => nameOf(item).toLowerCase().includes(needle)) }
+    })
+    .filter(({ items }) => !needle || items.length > 0)
+}
+
 function groupRows(rows: CommonPropertyRow[]) {
   const groups = new Map<string, CommonPropertyRow[]>()
   for (const row of rows) {
@@ -368,21 +477,22 @@ function PropertyValue({
 
 function PsetGroup({
   name,
-  defaultOpen = false,
+  open,
+  onToggle,
   children,
 }: {
   name: string
-  defaultOpen?: boolean
+  open: boolean
+  onToggle: () => void
   children: ReactNode
 }) {
-  const [open, setOpen] = useState(defaultOpen)
   const id = useMemo(() => name, [name])
   return (
     <div className="overflow-hidden rounded border border-border">
       <button
         type="button"
         className="flex w-full items-center justify-between bg-muted px-3 py-2 text-left text-[12px] font-semibold"
-        onClick={() => setOpen((value) => !value)}
+        onClick={onToggle}
         aria-expanded={open}
         aria-controls={id}
       >

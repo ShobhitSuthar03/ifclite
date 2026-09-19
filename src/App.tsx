@@ -110,6 +110,7 @@ import {
   spatialTreeFromWarehouse,
   entityDataFromWarehouse,
   elementLookupFromWarehouse,
+  globalIdsByExpressIds,
   propertyCatalogFromWarehouse,
   queryWarehouse,
   buildWarehousePropertyTree,
@@ -1193,6 +1194,18 @@ export default function App() {
     setMobileTab('properties')
     setRightTab('properties')
   }, [treeScopeIds])
+
+  const onCopySelectedGlobalIds = useCallback((): string[] => {
+    if (selectedIds.size === 0) return []
+    if (store) {
+      return [...selectedIds].map((id) => store.entities.getGlobalId(id)).filter(Boolean)
+    }
+    if (warehouse) {
+      const globalIds = globalIdsByExpressIds(warehouse, [...selectedIds])
+      return [...selectedIds].map((id) => globalIds.get(id)).filter((value): value is string => Boolean(value))
+    }
+    return []
+  }, [store, warehouse, selectedIds])
 
   const onSpecChange = useCallback((next: QuerySpec) => {
     setSpec(next)
@@ -2343,6 +2356,15 @@ export default function App() {
     setFitToken((token) => token + 1)
   }, [displayMode, focusIds, selectedIds, filterNodeIds])
 
+  const onSelectIsolated = useCallback(() => {
+    if (!viewIsolateIds || viewIsolateIds.size === 0) return
+    setSelectedIds(new Set(viewIsolateIds))
+    setSelectedId([...viewIsolateIds].at(-1) ?? null)
+    setFollowViewer(true)
+    setMobileTab((tab) => (tab === 'properties' ? tab : 'properties'))
+    setRightTab((tab) => (tab === 'properties' ? tab : 'properties'))
+  }, [viewIsolateIds])
+
   const meshStats = useMemo(
     () => ({
       meshCount: selectedMeshes.length,
@@ -2747,6 +2769,8 @@ export default function App() {
   const leftDock = {
     root: spatialRoot,
     store,
+    warehouse,
+    onCopySelectedGlobalIds,
     selectedId,
     selectedIds,
     isolatedIds,
@@ -3060,6 +3084,7 @@ export default function App() {
               onShowAll={onShowAll}
               onHideSelected={onHideSelected}
               onIsolateSelected={onIsolateSelected}
+              onSelectIsolated={onSelectIsolated}
               onSelect={onSelect}
               onHover={onHover}
               fitToken={fitToken}

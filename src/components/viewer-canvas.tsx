@@ -118,6 +118,8 @@ type ViewerCanvasProps = {
   onShowAll: () => void
   onHideSelected: () => void
   onIsolateSelected: () => void
+  /** Replaces the current selection with whatever is presently isolated. */
+  onSelectIsolated: () => void
 }
 
 export const ViewerCanvas = memo(function ViewerCanvas({
@@ -145,13 +147,19 @@ export const ViewerCanvas = memo(function ViewerCanvas({
   onShowAll,
   onHideSelected,
   onIsolateSelected,
+  onSelectIsolated,
 }: ViewerCanvasProps) {
   const [faceLayers, setFaceLayers] = useState<Set<FaceLayer>>(() => new Set(['all']))
   const [propertyName, setPropertyName] = useState('')
   const [meshPump, setMeshPump] = useState(0)
   const onSceneReadyRef = useRef(onSceneReady)
   const appliedHiddenTypeIdsRef = useRef<ReadonlySet<number> | null>(null)
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null)
+  const [contextMenu, setContextMenu] = useState<{
+    x: number
+    y: number
+    hasSelection: boolean
+    hasIsolation: boolean
+  } | null>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const [sectionEnabled, setSectionEnabled] = useState(false)
   const [sectionAxis, setSectionAxis] = useState<SectionAxis>('z')
@@ -470,7 +478,12 @@ export const ViewerCanvas = memo(function ViewerCanvas({
       // Rough menu footprint so it doesn't hang off the right/bottom edge.
       const x = Math.min(event.clientX, window.innerWidth - 160)
       const y = Math.min(event.clientY, window.innerHeight - 110)
-      setContextMenu({ x, y, hasSelection: selectedIdsRef.current.size > 0 })
+      setContextMenu({
+        x,
+        y,
+        hasSelection: selectedIdsRef.current.size > 0,
+        hasIsolation: (viewIsolateRef.current?.size ?? 0) > 0,
+      })
     }
 
     canvas.addEventListener('pointerdown', onPointerDown)
@@ -836,6 +849,17 @@ export const ViewerCanvas = memo(function ViewerCanvas({
             }}
           >
             Isolate selected
+          </button>
+          <button
+            type="button"
+            disabled={!contextMenu.hasIsolation}
+            className="block w-full px-3 py-1.5 text-left hover:bg-accent disabled:opacity-40 disabled:hover:bg-transparent"
+            onClick={() => {
+              onSelectIsolated()
+              setContextMenu(null)
+            }}
+          >
+            Select isolated
           </button>
         </div>
       ) : null}

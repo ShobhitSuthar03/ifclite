@@ -62,6 +62,42 @@ export function elementLookupFromWarehouse(db: BimDatabase): WarehouseElementLoo
   }
 }
 
+/** Resolves a batch of expressIds to their IFC GlobalId string, for ids present in the warehouse. */
+export function globalIdsByExpressIds(db: BimDatabase, expressIds: number[]): Map<number, string> {
+  const result = new Map<number, string>()
+  if (expressIds.length === 0) return result
+  try {
+    const placeholders = expressIds.map(() => '?').join(',')
+    const rows = all<{ express_id: number; global_id: string | null }>(
+      db,
+      `SELECT express_id, global_id FROM elements WHERE express_id IN (${placeholders})`,
+      expressIds,
+    )
+    for (const row of rows) if (row.global_id) result.set(row.express_id, row.global_id)
+  } catch (caught) {
+    console.warn('Warehouse GlobalId lookup failed', caught)
+  }
+  return result
+}
+
+/** Resolves a batch of IFC GlobalId strings to their expressId, for GUIDs present in the warehouse. */
+export function expressIdsByGlobalIds(db: BimDatabase, globalIds: string[]): Map<string, number> {
+  const result = new Map<string, number>()
+  if (globalIds.length === 0) return result
+  try {
+    const placeholders = globalIds.map(() => '?').join(',')
+    const rows = all<{ express_id: number; global_id: string }>(
+      db,
+      `SELECT express_id, global_id FROM elements WHERE global_id IN (${placeholders})`,
+      globalIds,
+    )
+    for (const row of rows) result.set(row.global_id, row.express_id)
+  } catch (caught) {
+    console.warn('Warehouse GlobalId lookup failed', caught)
+  }
+  return result
+}
+
 export function spatialTreeFromWarehouse(db: BimDatabase): SpatialTreeNode | null {
   const locations = all<SpatialRow>(
     db,

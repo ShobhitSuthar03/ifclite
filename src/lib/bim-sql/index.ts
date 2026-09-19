@@ -12,6 +12,8 @@ export {
   spatialTreeFromWarehouse,
   entityDataFromWarehouse,
   elementLookupFromWarehouse,
+  expressIdsByGlobalIds,
+  globalIdsByExpressIds,
 } from '@/lib/bim-sql/restore'
 export { propertyCatalogFromWarehouse, queryWarehouse, groupingCatalog } from '@/lib/bim-sql/catalog'
 export type { PropertyCatalogSet, WarehouseQueryRow } from '@/lib/bim-sql/catalog'
