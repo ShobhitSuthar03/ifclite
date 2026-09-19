@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { openBimDatabase, closeBimDatabase, run, all } from '@/lib/bim-sql/database'
 import { insertElementRecords, isWarehouseElementType } from '@/lib/bim-sql/ingest'
-import { FederationRegistry } from '@/lib/federation'
 import { spatialTreeFromWarehouse, entityDataFromWarehouse } from '@/lib/bim-sql/restore'
-import { applyScope, loadFilterOptions, queryElementIds, runReport } from '@/lib/bim-sql/queries'
+import { loadFilterOptions, queryElementIds, runReport } from '@/lib/bim-sql/queries'
 import { applyMutationPatchToWarehouse, applyMutationPatchesToWarehouse } from '@/lib/bim-sql/mutate'
 import { reportToCsv } from '@/lib/bim-sql/export'
 import { EMPTY_REPORT_FILTER, type ElementRecord } from '@/lib/bim-sql/types'
@@ -205,45 +204,6 @@ describe('bim sql warehouse', () => {
       expect(
         applyMutationPatchToWarehouse(db, { expressId: 99, kind: 'attribute', name: 'Name', value: 'Ghost' }),
       ).toBe(false)
-    } finally {
-      closeBimDatabase(db)
-    }
-  })
-
-  it('does not collide when two models reuse the same local expressIds (federation)', async () => {
-    const db = await openBimDatabase()
-    try {
-      // Two "files" that both happen to number their first two elements 1 and 2 -
-      // exactly the case that used to hit elements.express_id's UNIQUE constraint.
-      const registry = new FederationRegistry()
-      registry.registerModel('a', 'a.ifc', 2)
-      registry.registerModel('b', 'b.ifc', 2)
-      const globalize = (modelId: string, rows: ReturnType<typeof record>[]) =>
-        rows.map((row) => ({ ...row, expressId: registry.toGlobalId(modelId, row.expressId) }))
-
-      insertElementRecords(
-        db,
-        1,
-        globalize('a', [record({ expressId: 1, name: 'A1' }), record({ expressId: 2, name: 'A2' })]),
-      )
-      insertElementRecords(
-        db,
-        2,
-        globalize('b', [record({ expressId: 1, name: 'B1' }), record({ expressId: 2, name: 'B2' })]),
-      )
-
-      const rows = all<{ name: string }>(db, 'SELECT name FROM elements ORDER BY name')
-      expect(rows.map((row) => row.name)).toEqual(['A1', 'A2', 'B1', 'B2'])
-
-      applyScope(db, null)
-      const ids = queryElementIds(
-        db,
-        { storey: null, category: null, costCode: null, phase: null, status: null },
-        'category',
-        'IfcWall',
-      )
-      expect(ids).toHaveLength(4)
-      expect(new Set(ids).size).toBe(4) // every global id is distinct
     } finally {
       closeBimDatabase(db)
     }

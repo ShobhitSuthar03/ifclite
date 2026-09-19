@@ -35,7 +35,6 @@ import {
   type LoadResult,
   type LoadSource,
 } from '@/lib/ifc-loader'
-import type { MeshData } from '@ifc-lite/geometry'
 import {
   computeElementQuantities,
   encodeStoredQuantities,
@@ -203,8 +202,7 @@ import {
   stopMcpHost,
   waitForMcpReady,
 } from '@/lib/mcp/host'
-import { applyFederationOffsetToMesh, createViewerMeshStore } from '@/lib/viewer-meshes'
-import { FederationRegistry } from '@/lib/federation'
+import { createViewerMeshStore } from '@/lib/viewer-meshes'
 import { typeTreeFromMeshes, uniqueIfcTypeTree } from '@/lib/geometry-tree'
 import { labelStorePropertyChunk, loadStoreValueLabels, STORE_PROPERTY_CHUNK } from '@/lib/store-property-tree'
 
@@ -375,13 +373,6 @@ export default function App() {
   const mcpRevision = useRef(0)
   const applyingAgentSync = useRef(false)
   const [geometryStore] = useState(createViewerMeshStore)
-  // Session-wide id space for federation: registerModel()'d as each model
-  // finishes loading, so a second/third model's meshes never collide with an
-  // earlier one's expressId. Recreated on every fresh load (see `load` and
-  // `clearViewer`) so a new project starts a clean id space.
-  const federationRegistryRef = useRef<FederationRegistry | null>(null)
-  if (!federationRegistryRef.current) federationRegistryRef.current = new FederationRegistry()
-  const [addModelBusy, setAddModelBusy] = useState(false)
   const loadGen = useRef(0)
   const pendingSession = useRef<ProjectSession | null>(null)
   const pendingWarehouseRestore = useRef(false)
@@ -668,7 +659,6 @@ export default function App() {
     setWarehouseProgress(null)
     warehouseBuild.current = false
     setError(null)
-    federationRegistryRef.current = new FederationRegistry()
     setSelectedId(null)
     setSelectedIds(new Set())
     geometryStore.clear()
@@ -748,12 +738,6 @@ export default function App() {
         },
       )
       if (loadGen.current !== gen) return
-      // Registers the primary model at offset 0 (it's the first model in a
-      // fresh registry - see the reset in this function's setup above), so
-      // any later onAddModel() call computes the next model's offset from
-      // this one's true observed max expressId.
-      const primaryMaxId = geometryStore.ids().reduce((max, id) => Math.max(max, id), 0)
-      federationRegistryRef.current?.ensureModel(next.cacheKey, next.fileName, primaryMaxId)
       setResult(next)
       setGeometryGen((tick) => tick + 1)
       setFitToken((token) => token + 1)
@@ -883,7 +867,6 @@ export default function App() {
     setProgress(null)
     setLoadingName(null)
     setError(null)
-    federationRegistryRef.current = new FederationRegistry()
     setSelectedId(null)
     setSelectedIds(new Set())
     setResult(null)
@@ -1144,53 +1127,6 @@ export default function App() {
       setError(caught instanceof Error ? caught.message : String(caught))
     }
   }, [importAndLoad])
-
-  /**
-   * Federation proof-of-concept: loads a second (or third...) IFC file into
-   * the SAME scene as the one already open, instead of replacing it.
-   *
-   * Scoped to geometry only. The new model's meshes are globalized via the
-   * session's FederationRegistry (so its expressIds never collide with the
-   * primary model's) and appended to the existing geometryStore - it renders
-   * and is click-selectable/pickable right alongside the primary model. It
-   * does NOT yet join the primary model's spatial tree, BOQ/warehouse, QTO
-   * takeoff, or scheduling - those all still assume a single model and would
-   * need their own federation-aware rework (see the earlier scoping: bim-sql
-   * ingestion already supports a shared registry via ingestWarehouse's
-   * modelKey param, just not wired up to this handler yet).
-   *
-   * Batches are buffered until the whole file finishes loading, rather than
-   * streamed straight into the store like the primary load does - the true
-   * max expressId (needed to pick a non-colliding offset) isn't known until
-   * every batch has arrived, so the offset can't be decided any earlier.
-   */
-  const onAddModel = useCallback(async () => {
-    const registry = federationRegistryRef.current
-    if (!registry || addModelBusy || busy) return
-    try {
-      const source = await pickIfcFile()
-      if (!source) return
-      setAddModelBusy(true)
-      const buffered: MeshData[] = []
-      const next = await loadIfcModel(
-        source,
-        () => {},
-        (batch) => {
-          buffered.push(...batch)
-        },
-      )
-      const maxId = buffered.reduce((max, mesh) => Math.max(max, mesh.expressId), 0)
-      const model = registry.ensureModel(next.cacheKey, next.fileName, maxId)
-      for (const mesh of buffered) applyFederationOffsetToMesh(mesh, registry, model.id)
-      geometryStore.append(buffered)
-      setGeometryGen((tick) => tick + 1)
-      setFitToken((token) => token + 1)
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught))
-    } finally {
-      setAddModelBusy(false)
-    }
-  }, [addModelBusy, busy, geometryStore])
 
   const onDrop = useCallback(
     async (event: DragEvent<HTMLDivElement>) => {
@@ -1673,10 +1609,7 @@ export default function App() {
   }, [scheduleOpen, bottomTab, loadAssemblies])
 
   useEffect(() => {
-    // The MCP sidecar's only consumer today is the estimator chat/tools -
-    // pointless overhead (and an open local endpoint) in a build that has
-    // no estimation UI to drive it.
-    if (!ESTIMATION_ENABLED || !isDesktopShell() || !project) {
+    if (!isDesktopShell() || !project) {
       setMcp(null)
       void stopMcpHost()
       return
@@ -1722,7 +1655,7 @@ export default function App() {
         if (cancelled) return
         const message = caught instanceof Error ? caught.message : String(caught)
         setMcp({
-          url: 'http://127.0.0.1:8765/mcp',
+          url: 'http://127.0.0.1:8765',
           token: '',
           syncPort: 8766,
           ready: false,
@@ -3035,8 +2968,6 @@ export default function App() {
         canLoad={!desktopHost || Boolean(project)}
         onExportIfc={desktopHost && result ? () => void onExportIfc() : undefined}
         exportBusy={ifcExportBusy}
-        onAddModel={result ? () => void onAddModel() : undefined}
-        addModelBusy={addModelBusy}
       />
       {desktopHost && homeOpen ? (
         <div

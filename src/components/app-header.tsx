@@ -1,4 +1,4 @@
-import { FolderOpen, Loader2, Download, FilePlus2 } from 'lucide-react'
+import { FolderOpen, Loader2, Download } from 'lucide-react'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -16,11 +16,6 @@ type AppHeaderProps = {
   homeOpen?: boolean
   onExportIfc?: () => void
   exportBusy?: boolean
-  /** Loads an additional IFC file into the same scene/session alongside the
-   * one already open, instead of replacing it. Only offered once a model is
-   * already loaded. */
-  onAddModel?: () => void
-  addModelBusy?: boolean
 }
 
 export function AppHeader({
@@ -35,8 +30,6 @@ export function AppHeader({
   homeOpen = false,
   onExportIfc,
   exportBusy = false,
-  onAddModel,
-  addModelBusy = false,
 }: AppHeaderProps) {
   const kind = hostKind()
 
@@ -82,18 +75,6 @@ export function AppHeader({
           >
             {exportBusy ? <Loader2 className="animate-spin" /> : <Download />}
             {exportBusy ? 'Exporting…' : 'Export IFC'}
-          </Button>
-        ) : null}
-        {!homeOpen && onAddModel ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onAddModel}
-            disabled={busy || addModelBusy || !canLoad}
-            title="Load another IFC file into this scene, alongside the one already open (federation proof-of-concept: geometry only, not yet in the BOQ/warehouse or spatial tree)"
-          >
-            {addModelBusy ? <Loader2 className="animate-spin" /> : <FilePlus2 />}
-            {addModelBusy ? 'Adding…' : 'Add model'}
           </Button>
         ) : null}
         {!homeOpen ? (
