@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { countIfcBuildingsInBytes } from '@/lib/ifc-loader'
+import { countIfcBuildingsInBytes, hasLargeCoordinatesInBytes } from '@/lib/ifc-loader'
 
 function bytesOf(text: string): Uint8Array {
   return new TextEncoder().encode(text)
@@ -31,5 +31,26 @@ describe('countIfcBuildingsInBytes', () => {
   it('returns 0 for an empty or unrelated buffer', () => {
     expect(countIfcBuildingsInBytes(new Uint8Array())).toBe(0)
     expect(countIfcBuildingsInBytes(bytesOf('#1=IFCPROJECT($);'))).toBe(0)
+  })
+})
+
+describe('hasLargeCoordinatesInBytes', () => {
+  it('flags a real-world "shared coordinates" survey point (the ELOY_IFC repro case)', () => {
+    const text = '#84=IFCCARTESIANPOINT((66340063.515161946,174691418.77751407,24250.));'
+    expect(hasLargeCoordinatesInBytes(bytesOf(text))).toBe(true)
+  })
+
+  it('does not flag ordinary building-scale coordinates', () => {
+    const text = [
+      '#3=IFCCARTESIANPOINT((0.,0.,0.));',
+      '#33=IFCCARTESIANPOINT((0.,0.,-24250.));',
+      '#1251699=IFCCARTESIANPOINT((6415.,0.));',
+    ].join('\n')
+    expect(hasLargeCoordinatesInBytes(bytesOf(text))).toBe(false)
+  })
+
+  it('returns false for an empty or unrelated buffer', () => {
+    expect(hasLargeCoordinatesInBytes(new Uint8Array())).toBe(false)
+    expect(hasLargeCoordinatesInBytes(bytesOf('#1=IFCPROJECT($);'))).toBe(false)
   })
 })

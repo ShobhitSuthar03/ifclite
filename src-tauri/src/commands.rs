@@ -85,19 +85,73 @@ pub fn read_ifc_bytes(path: String) -> Result<Response, String> {
     Ok(Response::new(bytes))
 }
 
-/// Counts top-level `IFCBUILDING(` entity declarations in a STEP file, read
-/// straight from disk as raw bytes (no UTF-8 decode, no parsing) so this stays
-/// cheap even for a multi-hundred-MB file. Used to decide whether to route a
-/// load through the native pipeline at all - see the caller in ifc-loader.ts
-/// for why a count above 1 forces a WASM fallback instead.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IfcPipelineRisk {
+    pub building_count: usize,
+    pub has_large_coordinates: bool,
+}
+
+/// Cheap raw-byte/text scan of a STEP file (no real parsing) for two
+/// independent conditions under which the native geometry pipeline has been
+/// observed to misplace elements while WASM renders the same file correctly
+/// - see the caller in ifc-loader.ts for why either one forces a WASM
+/// fallback:
+///
+///  - more than one `IFCBUILDING(` root (a merged multi-discipline export,
+///    each building/site tree potentially carrying its own local coordinate
+///    baseline)
+///  - any `IFCCARTESIANPOINT` coordinate beyond a "real-world survey
+///    coordinate" scale - a Revit "shared coordinates" base point baked
+///    into the site placement, inherited by every element in the file
+///
+/// Both read from disk once as raw bytes; the building count never leaves
+/// that byte buffer, and the coordinate scan only decodes to text (needed to
+/// parse the numbers) after that.
 #[tauri::command]
-pub fn count_ifc_buildings(path: String) -> Result<usize, String> {
+pub fn analyze_ifc_for_pipeline_choice(path: String) -> Result<IfcPipelineRisk, String> {
     let bytes = fs::read(&path).map_err(|err| format!("failed to read {path}: {err}"))?;
-    const NEEDLE: &[u8] = b"IFCBUILDING(";
-    if bytes.len() < NEEDLE.len() {
-        return Ok(0);
+
+    const BUILDING_NEEDLE: &[u8] = b"IFCBUILDING(";
+    let building_count = if bytes.len() >= BUILDING_NEEDLE.len() {
+        bytes.windows(BUILDING_NEEDLE.len()).filter(|window| *window == BUILDING_NEEDLE).count()
+    } else {
+        0
+    };
+
+    // 10,000,000 mm ~= 10 km, the same "normal coordinate ceiling"
+    // @ifc-lite/geometry's own CoordinateHandler uses on its WASM path
+    // (NORMAL_COORD_THRESHOLD_M = 10_000), assuming millimetre length units
+    // - the near-universal convention for Revit-authored IFC exports. A
+    // building's own local geometry never legitimately approaches this in
+    // any plausible length unit, so this stays a reliable signal without
+    // needing to detect the file's declared unit.
+    const LARGE_COORDINATE_THRESHOLD_MM: f64 = 10_000_000.0;
+    const POINT_NEEDLE: &str = "IFCCARTESIANPOINT((";
+    let text = String::from_utf8_lossy(&bytes);
+    let mut has_large_coordinates = false;
+    let mut search_from = 0usize;
+    while let Some(relative) = text[search_from..].find(POINT_NEEDLE) {
+        let start = search_from + relative + POINT_NEEDLE.len();
+        let Some(relative_end) = text[start..].find("))") else {
+            break;
+        };
+        let numbers = &text[start..start + relative_end];
+        let exceeds = numbers.split(',').any(|token| {
+            token
+                .trim()
+                .parse::<f64>()
+                .map(|value| value.abs() > LARGE_COORDINATE_THRESHOLD_MM)
+                .unwrap_or(false)
+        });
+        if exceeds {
+            has_large_coordinates = true;
+            break;
+        }
+        search_from = start + relative_end + 2;
     }
-    Ok(bytes.windows(NEEDLE.len()).filter(|window| *window == NEEDLE).count())
+
+    Ok(IfcPipelineRisk { building_count, has_large_coordinates })
 }
 
 #[derive(serde::Serialize)]

@@ -8,7 +8,7 @@ mod types;
 
 use cache::{default_cache_dir, GeometryCache};
 use commands::{
-    count_ifc_buildings, get_geometry, get_geometry_from_path, get_geometry_streaming,
+    analyze_ifc_for_pipeline_choice, get_geometry, get_geometry_from_path, get_geometry_streaming,
     get_geometry_streaming_from_path, get_native_geometry_cache_manifest,
     get_native_geometry_cache_packed_shard, get_native_geometry_cache_stream_status, hash_ifc_path,
     read_ifc_bytes, stat_local_file,
@@ -42,7 +42,7 @@ pub fn run() {
             get_native_geometry_cache_stream_status,
             hash_ifc_path,
             read_ifc_bytes,
-            count_ifc_buildings,
+            analyze_ifc_for_pipeline_choice,
             stat_local_file,
             get_projects_root,
             list_projects,
